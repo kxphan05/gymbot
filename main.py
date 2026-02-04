@@ -19,6 +19,7 @@ from handlers import (
     done_handler,
     start_workout,
     select_template,
+    select_exercise,
     handle_exercise_action,
     log_exercise,
     history,
@@ -28,6 +29,7 @@ from handlers import (
     EXERCISE_NAME,
     EXERCISE_DETAILS,
     WORKOUT_TEMPLATE_SELECT,
+    WORKOUT_EXERCISE_SELECT,
     WORKOUT_EXERCISE_CONFIRM,
     WORKOUT_EXERCISE_INPUT,
 )
@@ -75,6 +77,9 @@ def main():
             WORKOUT_TEMPLATE_SELECT: [
                 CallbackQueryHandler(select_template, pattern="^tmpl_")
             ],
+            WORKOUT_EXERCISE_SELECT: [
+                CallbackQueryHandler(select_exercise, pattern="^ex_")
+            ],
             WORKOUT_EXERCISE_CONFIRM: [CallbackQueryHandler(handle_exercise_action)],
             WORKOUT_EXERCISE_INPUT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, log_exercise)
@@ -96,7 +101,8 @@ def main():
     )
     application.add_handler(
         CallbackQueryHandler(
-            handle_exercise_action, pattern="^(confirm|rest|skip|log_set|w_|r_)"
+            handle_exercise_action,
+            pattern="^(confirm|rest|skip|log_set_|edit_set_|complete_|w_|r_)",
         )
     )
 

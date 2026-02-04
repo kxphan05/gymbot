@@ -23,10 +23,11 @@ logger = logging.getLogger(__name__)
     EXERCISE_NAME,
     EXERCISE_DETAILS,
     WORKOUT_TEMPLATE_SELECT,
+    WORKOUT_EXERCISE_SELECT,
     WORKOUT_EXERCISE_CONFIRM,
     WORKOUT_EXERCISE_INPUT,
     EXERCISE_SETS_INPUT,
-) = range(7)
+) = range(8)
 
 WEIGHT_KEYBOARD = InlineKeyboardMarkup(
     [
@@ -99,6 +100,7 @@ REPS_KEYBOARD = InlineKeyboardMarkup(
             InlineKeyboardButton("20", callback_data="r_20"),
         ],
         [
+            InlineKeyboardButton("Custom", callback_data="r_custom"),
             InlineKeyboardButton("⬅️ Back to Weight", callback_data="r_back"),
         ],
     ]
@@ -313,11 +315,75 @@ async def select_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for ex in exercises
         ],
         "current_index": 0,
-        "logged_sets": {},
+        "logged_sets": {},  # {exercise_idx: [{weight, reps, timestamp}]}
     }
+
+    # Show all exercises for selection
+    keyboard = []
+    for idx, exercise in enumerate(exercises):
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    f"{idx + 1}. {exercise.exercise_name} ({exercise.default_sets} sets x {exercise.default_weight}kg x {exercise.default_reps} reps)",
+                    callback_data=f"ex_{idx}",
+                )
+            ]
+        )
+
+    await query.edit_message_text(
+        f"Template: {template.name}\n\nSelect an exercise to start:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    return WORKOUT_EXERCISE_SELECT
+
+
+async def select_exercise(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    exercise_idx = int(query.data.split("_")[1])
+    context.user_data["current_workout"]["current_index"] = exercise_idx
 
     await process_next_exercise(query.message, context, query.from_user.id)
     return WORKOUT_EXERCISE_CONFIRM
+
+
+def build_set_keyboard(exercise_idx, ex_data, logged_sets, is_completed=False):
+    """Build keyboard with individual set buttons."""
+    keyboard = []
+    total_sets = ex_data["default_sets"]
+    default_weight = ex_data["default_weight"]
+    default_reps = ex_data["default_reps"]
+
+    for set_num in range(1, total_sets + 1):
+        if set_num <= len(logged_sets):
+            logged = logged_sets[set_num - 1]
+            button_text = f"Set {set_num}: {logged['weight']}kg x {logged['reps']} ✅"
+            callback_data = f"edit_set_{exercise_idx}_{set_num}"
+        else:
+            button_text = f"Set {set_num}: {default_weight}kg x {default_reps}"
+            callback_data = f"log_set_{exercise_idx}_{set_num}"
+        keyboard.append(
+            [InlineKeyboardButton(button_text, callback_data=callback_data)]
+        )
+
+    if is_completed:
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    "✅ Complete Exercise", callback_data=f"complete_{exercise_idx}"
+                )
+            ]
+        )
+
+    keyboard.extend(
+        [
+            [InlineKeyboardButton("⏰ Rest 60s", callback_data="rest")],
+            [InlineKeyboardButton("Skip Exercise ➡️", callback_data="skip")],
+        ]
+    )
+
+    return InlineKeyboardMarkup(keyboard)
 
 
 async def process_next_exercise(message, context, user_id):
@@ -332,7 +398,7 @@ async def process_next_exercise(message, context, user_id):
         return ConversationHandler.END
 
     ex_data = workout_data["exercises"][idx]
-    logged_sets = workout_data["logged_sets"].get(idx, 0)
+    logged_sets = workout_data["logged_sets"].get(idx, [])
 
     prev_log_text = "No history"
     async with AsyncSessionLocal() as session:
@@ -349,32 +415,23 @@ async def process_next_exercise(message, context, user_id):
         if prev_log:
             prev_log_text = f"{prev_log.sets}s x {prev_log.weight}kg x {prev_log.reps}"
 
+    completed_count = len(logged_sets)
+    is_completed = completed_count >= ex_data["default_sets"]
+
     text = (
         f"**Exercise {idx + 1}/{len(workout_data['exercises'])}: {ex_data['name']}**\n"
-        f"Progress: {logged_sets}/{ex_data['default_sets']} sets completed\n"
-        f"Previous: {prev_log_text}\n"
-        f"Target: {ex_data['default_sets']}s x {ex_data['default_weight']}kg x {ex_data['default_reps']}"
+        f"Progress: {completed_count}/{ex_data['default_sets']} sets completed\n"
+        f"Previous: {prev_log_text}"
     )
 
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ Confirm Set", callback_data="confirm"),
-            InlineKeyboardButton("✏️ Log Set", callback_data="log_set"),
-        ],
-        [InlineKeyboardButton("⏰ Rest 60s", callback_data="rest")],
-        [InlineKeyboardButton("Skip Exercise ➡️", callback_data="skip")],
-    ]
+    keyboard = build_set_keyboard(idx, ex_data, logged_sets, is_completed)
 
     logger.info(f"Sending exercise keyboard for {ex_data['name']}")
 
     if hasattr(message, "edit_text"):
-        await message.edit_text(
-            text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        await message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
     else:
-        await message.reply_text(
-            text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        await message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
 
 
 async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -398,43 +455,72 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
         await process_next_exercise(query.message, context, user_id)
         return WORKOUT_EXERCISE_CONFIRM
 
-    if data == "confirm":
+    if data.startswith("log_set_"):
+        parts = data.split("_")
+        exercise_idx = int(parts[2])
+        set_num = int(parts[3])
+        context.user_data["pending_exercise_idx"] = exercise_idx
+        context.user_data["pending_set_num"] = set_num
+        context.user_data["pending_weight"] = None
+        context.user_data["pending_reps"] = None
+
+        # Show template defaults
+        workout_data = context.user_data.get("current_workout", {})
+        ex_data = workout_data["exercises"][exercise_idx]
+        default_weight = ex_data["default_weight"]
+
+        await query.message.edit_text(
+            f"Set {set_num}: Select weight (default: {default_weight}kg):",
+            reply_markup=WEIGHT_KEYBOARD,
+        )
+        return WORKOUT_EXERCISE_INPUT
+
+    if data.startswith("edit_set_"):
+        parts = data.split("_")
+        exercise_idx = int(parts[2])
+        set_num = int(parts[3])
+        context.user_data["pending_exercise_idx"] = exercise_idx
+        context.user_data["pending_set_num"] = set_num
         workout_data = context.user_data["current_workout"]
-        idx = workout_data["current_index"]
-        ex_data = workout_data["exercises"][idx]
-        logged_sets = workout_data["logged_sets"].get(idx, 0)
-
-        if logged_sets == 0:
-            await query.message.reply_text(
-                "Please log at least one set before confirming."
+        logged_sets = workout_data["logged_sets"].get(exercise_idx, [])
+        if set_num <= len(logged_sets):
+            existing = logged_sets[set_num - 1]
+            context.user_data["pending_weight"] = existing["weight"]
+            context.user_data["pending_reps"] = existing["reps"]
+            await query.message.edit_text(
+                f"Set {set_num}: Edit weight ({existing['weight']}kg):",
+                reply_markup=WEIGHT_KEYBOARD,
             )
-            return WORKOUT_EXERCISE_CONFIRM
+        else:
+            context.user_data["pending_weight"] = None
+            context.user_data["pending_reps"] = None
+            await query.message.edit_text(
+                f"Set {set_num}: Select weight:",
+                reply_markup=WEIGHT_KEYBOARD,
+            )
+        return WORKOUT_EXERCISE_INPUT
 
-        for s in range(logged_sets):
+    if data.startswith("complete_"):
+        exercise_idx = int(data.split("_")[1])
+        workout_data = context.user_data["current_workout"]
+        ex_data = workout_data["exercises"][exercise_idx]
+        logged_sets = workout_data["logged_sets"].get(exercise_idx, [])
+
+        for log_data in logged_sets:
             log = WorkoutLog(
                 user_id=user_id,
                 exercise_name=ex_data["name"],
                 sets=1,
-                weight=ex_data["default_weight"],
-                reps=ex_data["default_reps"],
+                weight=log_data["weight"],
+                reps=log_data["reps"],
             )
             async with AsyncSessionLocal() as session:
                 session.add(log)
                 await session.commit()
 
-        workout_data["current_index"] += 1
-        workout_data["logged_sets"][idx] = 0
+        workout_data["current_index"] = exercise_idx + 1
         await process_next_exercise(query.message, context, user_id)
         return WORKOUT_EXERCISE_CONFIRM
-
-    if data == "log_set":
-        context.user_data["pending_weight"] = None
-        context.user_data["pending_reps"] = None
-        await query.message.edit_text(
-            "Select weight for this set:",
-            reply_markup=WEIGHT_KEYBOARD,
-        )
-        return WORKOUT_EXERCISE_INPUT
 
     if data.startswith("w_"):
         return await handle_weight_select(update, context, user_id)
@@ -451,7 +537,6 @@ async def handle_weight_select(
     data = query.data
 
     if data == "w_back":
-        await query.message.delete()
         await process_next_exercise(query.message, context, user_id)
         return WORKOUT_EXERCISE_CONFIRM
 
@@ -465,8 +550,15 @@ async def handle_weight_select(
     weight = float(data.replace("w_", ""))
     context.user_data["pending_weight"] = weight
 
+    # Show template default for reps
+    exercise_idx = context.user_data.get("pending_exercise_idx", 0)
+    ex_data = context.user_data.get("current_workout", {}).get("exercises", [{}])[
+        exercise_idx
+    ]
+    default_reps = ex_data.get("default_reps", 0)
+
     await query.message.edit_text(
-        f"Weight: {weight}kg\nSelect reps for this set:",
+        f"Weight: {weight}kg\nSelect reps (default: {default_reps}):",
         reply_markup=REPS_KEYBOARD,
     )
     return WORKOUT_EXERCISE_INPUT
@@ -479,9 +571,28 @@ async def handle_reps_select(
     await query.answer()
     data = query.data
 
-    if data == "r_back":
+    if data == "r_custom":
+        exercise_idx = context.user_data.get("pending_exercise_idx", 0)
+        ex_data = context.user_data.get("current_workout", {}).get("exercises", [{}])[
+            exercise_idx
+        ]
+        default_reps = ex_data.get("default_reps", 0)
+
         await query.message.edit_text(
-            "Select weight for this set:",
+            f"Enter custom reps (default: {default_reps}):",
+        )
+        context.user_data["waiting_for_reps"] = True
+        return WORKOUT_EXERCISE_INPUT
+
+    if data == "r_back":
+        exercise_idx = context.user_data.get("pending_exercise_idx", 0)
+        ex_data = context.user_data.get("current_workout", {}).get("exercises", [{}])[
+            exercise_idx
+        ]
+        default_weight = ex_data.get("default_weight", 0)
+
+        await query.message.edit_text(
+            f"Set {context.user_data.get('pending_set_num', 1)}: Select weight for this set (default: {default_weight}kg):",
             reply_markup=WEIGHT_KEYBOARD,
         )
         return WORKOUT_EXERCISE_INPUT
@@ -490,32 +601,63 @@ async def handle_reps_select(
     weight = context.user_data.get("pending_weight")
 
     if weight is None:
-        await query.message.delete()
         await process_next_exercise(query.message, context, user_id)
         return WORKOUT_EXERCISE_CONFIRM
 
+    exercise_idx = context.user_data.get("pending_exercise_idx", 0)
+    set_num = context.user_data.get("pending_set_num", 1)
+
     workout_data = context.user_data.get("current_workout", {})
-    idx = workout_data.get("current_index", 0)
-    ex_data = workout_data.get("exercises", [{}])[idx] if workout_data else {}
+    if "logged_sets" not in workout_data:
+        workout_data["logged_sets"] = {}
 
-    log = WorkoutLog(
-        user_id=user_id,
-        exercise_name=ex_data["name"],
-        sets=1,
-        weight=weight,
-        reps=reps,
-    )
-    async with AsyncSessionLocal() as session:
-        session.add(log)
-        await session.commit()
+    if exercise_idx not in workout_data["logged_sets"]:
+        workout_data["logged_sets"][exercise_idx] = []
 
-    logged_sets = workout_data["logged_sets"].get(idx, 0)
-    workout_data["logged_sets"][idx] = logged_sets + 1
+    logged_sets = workout_data["logged_sets"][exercise_idx]
+
+    while len(logged_sets) < set_num:
+        logged_sets.append({"weight": None, "reps": None})
+
+    logged_sets[set_num - 1] = {"weight": weight, "reps": reps}
+
     context.user_data.pop("pending_weight", None)
     context.user_data.pop("pending_reps", None)
+    context.user_data.pop("pending_exercise_idx", None)
+    context.user_data.pop("pending_set_num", None)
 
-    await query.message.delete()
-    await process_next_exercise(query.message, context, user_id)
+    # Show updated exercise view without deleting message
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(WorkoutLog)
+            .where(
+                WorkoutLog.user_id == user_id,
+                WorkoutLog.exercise_name
+                == workout_data["exercises"][exercise_idx]["name"],
+            )
+            .order_by(desc(WorkoutLog.timestamp))
+            .limit(1)
+        )
+        prev_log = result.scalar_one_or_none()
+        if prev_log:
+            prev_log_text = f"{prev_log.sets}s x {prev_log.weight}kg x {prev_log.reps}"
+        else:
+            prev_log_text = "No history"
+
+    completed_count = len(logged_sets)
+    ex_data = workout_data["exercises"][exercise_idx]
+    await query.message.edit_text(
+        f"Set {set_num} logged: {weight}kg x {reps} reps\n\n"
+        f"Progress: {completed_count}/{ex_data['default_sets']} sets completed\n"
+        f"Previous: {prev_log_text}",
+        parse_mode="Markdown",
+        reply_markup=build_set_keyboard(
+            exercise_idx,
+            ex_data,
+            logged_sets,
+            completed_count >= ex_data["default_sets"],
+        ),
+    )
     return WORKOUT_EXERCISE_CONFIRM
 
 
@@ -529,13 +671,65 @@ async def log_exercise(update: Update, context: ContextTypes.DEFAULT_TYPE):
             weight = float(text)
             context.user_data["pending_weight"] = weight
             context.user_data["waiting_for_weight"] = False
+
+            # Show template default for reps
+            exercise_idx = context.user_data.get("pending_exercise_idx", 0)
+            ex_data = context.user_data.get("current_workout", {}).get(
+                "exercises", [{}]
+            )[exercise_idx]
+            default_reps = ex_data.get("default_reps", 0)
+
             await update.message.reply_text(
-                f"Weight: {weight}kg\nSelect reps for this set:",
+                f"Weight: {weight}kg\nSelect reps (default: {default_reps}):",
                 reply_markup=REPS_KEYBOARD,
             )
             return WORKOUT_EXERCISE_INPUT
         except ValueError:
             await update.message.reply_text("Invalid weight. Enter a number:")
+            return WORKOUT_EXERCISE_INPUT
+
+    if context.user_data.get("waiting_for_reps"):
+        try:
+            reps = int(text)
+            context.user_data["pending_reps"] = reps
+            context.user_data["waiting_for_reps"] = False
+
+            # Log the set with custom reps
+            weight = context.user_data.get("pending_weight")
+            exercise_idx = context.user_data.get("pending_exercise_idx", 0)
+            set_num = context.user_data.get("pending_set_num", 1)
+
+            if weight is None:
+                await update.message.delete()
+                await process_next_exercise(update.message, context, user_id)
+                return WORKOUT_EXERCISE_CONFIRM
+
+            workout_data = context.user_data.get("current_workout", {})
+            if "logged_sets" not in workout_data:
+                workout_data["logged_sets"] = {}
+            if exercise_idx not in workout_data["logged_sets"]:
+                workout_data["logged_sets"][exercise_idx] = []
+
+            logged_sets = workout_data["logged_sets"][exercise_idx]
+            while len(logged_sets) < set_num:
+                logged_sets.append({"weight": None, "reps": None})
+
+            logged_sets[set_num - 1] = {"weight": weight, "reps": reps}
+
+            ex_data = workout_data["exercises"][exercise_idx]
+            await update.message.edit_text(
+                f"Set {set_num} logged: {weight}kg x {reps} reps\n\n"
+                f"Progress: {len(logged_sets)}/{ex_data['default_sets']} sets completed",
+                reply_markup=build_set_keyboard(
+                    exercise_idx,
+                    ex_data,
+                    logged_sets,
+                    len(logged_sets) >= ex_data["default_sets"],
+                ),
+            )
+            return WORKOUT_EXERCISE_CONFIRM
+        except ValueError:
+            await update.message.reply_text("Invalid reps. Enter a number:")
             return WORKOUT_EXERCISE_INPUT
 
     try:
@@ -546,19 +740,27 @@ async def log_exercise(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Invalid format. Try again (e.g., '55 8'):")
         return WORKOUT_EXERCISE_INPUT
 
-    workout_data = context.user_data["current_workout"]
-    idx = workout_data["current_index"]
-    ex_data = workout_data["exercises"][idx]
+    exercise_idx = context.user_data.get("pending_exercise_idx", 0)
+    set_num = context.user_data.get("pending_set_num", 1)
 
-    log = WorkoutLog(
-        user_id=user_id, exercise_name=ex_data["name"], sets=1, weight=weight, reps=reps
-    )
-    async with AsyncSessionLocal() as session:
-        session.add(log)
-        await session.commit()
+    workout_data = context.user_data.get("current_workout", {})
+    if "logged_sets" not in workout_data:
+        workout_data["logged_sets"] = {}
 
-    logged_sets = workout_data["logged_sets"].get(idx, 0)
-    workout_data["logged_sets"][idx] = logged_sets + 1
+    if exercise_idx not in workout_data["logged_sets"]:
+        workout_data["logged_sets"][exercise_idx] = []
+
+    logged_sets = workout_data["logged_sets"][exercise_idx]
+
+    while len(logged_sets) < set_num:
+        logged_sets.append({"weight": None, "reps": None})
+
+    logged_sets[set_num - 1] = {"weight": weight, "reps": reps}
+
+    context.user_data.pop("pending_weight", None)
+    context.user_data.pop("pending_reps", None)
+    context.user_data.pop("pending_exercise_idx", None)
+    context.user_data.pop("pending_set_num", None)
 
     await update.message.delete()
     await process_next_exercise(update.message, context, user_id)
@@ -570,37 +772,6 @@ async def rest_timer_callback(context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(
         job.chat_id, text="Rest time over! 🔔 Get back to work!"
     )
-
-
-async def log_exercise(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-
-    try:
-        text = update.message.text
-        weight_str, reps_str = text.split()
-        weight = float(weight_str)
-        reps = int(reps_str)
-    except ValueError:
-        await update.message.reply_text("Invalid format. Try again (e.g., '55 8'):")
-        return WORKOUT_EXERCISE_INPUT
-
-    workout_data = context.user_data["current_workout"]
-    idx = workout_data["current_index"]
-    ex_data = workout_data["exercises"][idx]
-
-    log = WorkoutLog(
-        user_id=user_id, exercise_name=ex_data["name"], sets=1, weight=weight, reps=reps
-    )
-    async with AsyncSessionLocal() as session:
-        session.add(log)
-        await session.commit()
-
-    logged_sets = workout_data["logged_sets"].get(idx, 0)
-    workout_data["logged_sets"][idx] = logged_sets + 1
-
-    await update.message.delete()
-    await process_next_exercise(update.message, context, user_id)
-    return WORKOUT_EXERCISE_CONFIRM
 
 
 async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -645,52 +816,6 @@ async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = "🏋️ Your workouts from the last 2 weeks:"
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-
-
-async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    two_weeks_ago = datetime.datetime.now() - datetime.timedelta(days=14)
-
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(WorkoutLog)
-            .where(WorkoutLog.user_id == user_id)
-            .where(WorkoutLog.timestamp >= two_weeks_ago)
-            .order_by(desc(WorkoutLog.timestamp))
-        )
-        logs = result.scalars().all()
-
-    if not logs:
-        await update.message.reply_text(
-            "No workouts in the last 2 weeks. Time to get moving! 💪"
-        )
-        return
-
-    workouts_by_date = {}
-    for log in logs:
-        date_key = log.timestamp.date()
-        if date_key not in workouts_by_date:
-            workouts_by_date[date_key] = []
-        workouts_by_date[date_key].append(log)
-
-    keyboard = []
-    for date in sorted(workouts_by_date.keys(), reverse=True):
-        log_count = len(workouts_by_date[date])
-        date_str = date.strftime("%b %d, %Y")
-        callback_data = f"hist_{date.isoformat()}"
-        keyboard.append(
-            [
-                InlineKeyboardButton(
-                    f"📅 {date_str} ({log_count} exercises)",
-                    callback_data=callback_data,
-                )
-            ]
-        )
-
-    await update.message.reply_text(
-        "🏋️ Your workouts from the last 2 weeks:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
 
 
 async def history_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
