@@ -7,6 +7,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     MessageHandler,
     filters,
+    JobQueue,
 )
 from handlers import (
     start,
@@ -50,7 +51,13 @@ def main():
         print("Error: BOT_TOKEN environment variable not set.")
         return
 
-    application = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
+    application = (
+        ApplicationBuilder()
+        .token(TOKEN)
+        .post_init(post_init)
+        .job_queue(JobQueue())
+        .build()
+    )
 
     create_template_conv = ConversationHandler(
         entry_points=[CommandHandler("create_template", create_template_start)],
@@ -102,7 +109,7 @@ def main():
     application.add_handler(
         CallbackQueryHandler(
             handle_exercise_action,
-            pattern="^(confirm|rest|skip|log_set_|edit_set_|complete_|w_|r_)",
+            pattern="^(confirm|rest|skip|log_set_|edit_set_|complete_|w_|r_|end_workout|add_exercise|remove_exercise_|use_defaults|use_existing_values|edit_weight|edit_reps)",
         )
     )
 
