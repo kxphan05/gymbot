@@ -1,10 +1,9 @@
-version: '3.8'
-
 services:
   db:
     image: postgres:15
-    env_file:
-      - .env
+    environment:
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: gymbot
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
@@ -17,9 +16,10 @@ services:
 
   bot:
     build: .
-    command: python main.py
-    env_file:
-      - .env
+    command: uv run python main.py
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:password@db:5432/gymbot
+      BOT_TOKEN: ${BOT_TOKEN}
     volumes:
       - .:/app
     depends_on:

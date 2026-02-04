@@ -38,7 +38,7 @@ gymbot/
 -   Docker installed.
 -   A Telegram Bot Token (get one from [@BotFather](https://t.me/BotFather)).
 
-### Docker Setup
+### Installation
 
 1.  **Configure the bot**:
     Copy the example environment file and edit it with your credentials.
@@ -47,51 +47,34 @@ gymbot/
     ```
     Open `.env` and paste your `BOT_TOKEN`.
 
-2.  **Start PostgreSQL**:
+2.  **Start everything with Docker Compose**:
     ```bash
-    docker run -d --name gymbot-db-1 \
-        -e POSTGRES_PASSWORD=password \
-        -e POSTGRES_DB=gymbot \
-        postgres:15
+    docker compose up --build -d
     ```
 
-3.  **Build the bot**:
-    ```bash
-    docker build --no-cache -t gymbot .
-    ```
+That's it! The bot will automatically start once the database is healthy.
 
-4.  **Run the bot** (connected to PostgreSQL network):
-    ```bash
-    docker run -d --name gymbot --network container:gymbot-db-1 gymbot
-    ```
+### Managing the Bot
 
-The bot should now be online and responsive.
-
-### Stopping and Restarting
+**View logs**:
+```bash
+docker compose logs -f
+```
 
 **Stop the bot**:
 ```bash
-docker stop gymbot
+docker compose down
 ```
 
-**Remove the bot container**:
+**Restart after code changes**:
 ```bash
-docker rm gymbot
+docker compose up --build -d
 ```
 
-**Restart the bot** (after code changes):
+**Reset the database** (deletes all data):
 ```bash
-docker build --no-cache -t gymbot . && docker run -d --name gymbot --network container:gymbot-db-1 gymbot
-```
-
-### Rebuilding Database
-To wipe the database and start fresh:
-```bash
-docker stop gymbot-db-1 && docker rm gymbot-db-1
-docker volume rm gymbot_postgres_data 2>/dev/null
-docker run -d --name gymbot-db-1 -e POSTGRES_PASSWORD=password -e POSTGRES_DB=gymbot postgres:15
-docker stop gymbot && docker rm gymbot
-docker build --no-cache -t gymbot . && docker run -d --name gymbot --network container:gymbot-db-1 gymbot
+docker compose down -v
+docker compose up --build -d
 ```
 
 ## 🧪 Testing
