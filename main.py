@@ -148,7 +148,7 @@ def main():
     application.add_handler(
         CallbackQueryHandler(
             handle_exercise_action,
-            pattern="^(skip|rest|confirm|w_|r_)",
+            pattern="^(skip|rest|back_to_exercise|confirm|w_|r_)",
         )
     )
 

@@ -674,8 +674,14 @@ def build_set_keyboard(exercise_idx, ex_data, logged_sets, is_completed=False):
     for set_num in range(1, total_sets + 1):
         if set_num <= len(logged_sets):
             logged = logged_sets[set_num - 1]
-            button_text = f"Set {set_num}: {logged['weight']}kg x {logged['reps']} ✅"
-            callback_data = f"edit_set_{exercise_idx}_{set_num}"
+            if logged.get("weight") is not None and logged.get("reps") is not None:
+                button_text = (
+                    f"Set {set_num}: {logged['weight']}kg x {logged['reps']} ✅"
+                )
+                callback_data = f"edit_set_{exercise_idx}_{set_num}"
+            else:
+                button_text = f"Set {set_num}: {default_weight}kg x {default_reps}"
+                callback_data = f"log_set_{exercise_idx}_{set_num}"
         else:
             button_text = f"Set {set_num}: {default_weight}kg x {default_reps}"
             callback_data = f"log_set_{exercise_idx}_{set_num}"
@@ -694,6 +700,7 @@ def build_set_keyboard(exercise_idx, ex_data, logged_sets, is_completed=False):
 
     keyboard.extend(
         [
+            [InlineKeyboardButton("⬅️ Back", callback_data="back_to_exercise")],
             [InlineKeyboardButton("⏰ Rest 5m", callback_data="rest")],
             [InlineKeyboardButton("Skip Exercise ➡️", callback_data="skip")],
         ]
@@ -745,7 +752,10 @@ async def process_next_exercise(message, context, user_id):
     logger.info(f"Sending exercise keyboard for {ex_data['name']}")
 
     if hasattr(message, "edit_text"):
-        await message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+        try:
+            await message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+        except Exception:
+            pass
     else:
         await message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
     return WORKOUT_EXERCISE_CONFIRM
@@ -1041,6 +1051,35 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
 
         workout_data["current_index"] = exercise_idx + 1
         return await process_next_exercise(query.message, context, user_id)
+
+    if data == "back_to_exercise":
+        workout_data = context.user_data.get("current_workout")
+        if workout_data:
+            keyboard = []
+            for idx, ex in enumerate(workout_data["exercises"]):
+                keyboard.append(
+                    [
+                        InlineKeyboardButton(
+                            f"{idx + 1}. {ex['name']} ({ex['default_sets']} sets x {ex['default_weight']}kg x {ex['default_reps']} reps)",
+                            callback_data=f"ex_{idx}",
+                        ),
+                        InlineKeyboardButton(
+                            "❌", callback_data=f"remove_exercise_{idx}"
+                        ),
+                    ]
+                )
+            keyboard.append(
+                [InlineKeyboardButton("🛑 End Workout", callback_data="end_workout")]
+            )
+            keyboard.append(
+                [InlineKeyboardButton("➕ Add Exercise", callback_data="add_exercise")]
+            )
+            await query.message.edit_text(
+                "Select an exercise to continue:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+            return WORKOUT_EXERCISE_SELECT
+        return WORKOUT_EXERCISE_CONFIRM
 
     if data == "end_workout":
         context.user_data.pop("current_workout", None)
