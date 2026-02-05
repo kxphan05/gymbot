@@ -59,6 +59,7 @@ class WorkoutLog(Base):
     __tablename__ = "workout_logs"
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    template_name = Column(String, nullable=True)
     exercise_name = Column(String, nullable=False)
     sets = Column(Integer, nullable=False)
     weight = Column(Float, nullable=False)
