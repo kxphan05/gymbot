@@ -260,9 +260,30 @@ async def done_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await save_template(update, context)
 
 
+async def end_workout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle end_workout callback from any state."""
+    query = update.callback_query
+    await query.answer()
+    context.user_data.pop("current_workout", None)
+    context.user_data.pop("selected_exercise", None)
+    context.user_data.pop("exercise_history", None)
+    context.user_data.pop("waiting_for_add_exercise", None)
+    await query.edit_message_text(
+        "Workout ended. Great effort! 💪\n/start_workout to begin a new workout."
+    )
+    return ConversationHandler.END
+
+
 async def start_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info(f"start_workout called by user {user_id}")
+
+    if context.user_data.get("current_workout"):
+        logger.info(f"Clearing stale workout data for user {user_id}")
+        context.user_data.pop("current_workout", None)
+        context.user_data.pop("selected_exercise", None)
+        context.user_data.pop("exercise_history", None)
+        context.user_data.pop("waiting_for_add_exercise", None)
 
     async with AsyncSessionLocal() as session:
         result = await session.execute(
@@ -439,6 +460,7 @@ async def process_next_exercise(message, context, user_id):
         await message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
     else:
         await message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
+    return WORKOUT_EXERCISE_CONFIRM
 
 
 async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -457,7 +479,16 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
         return WORKOUT_EXERCISE_CONFIRM
 
     if data == "skip":
-        workout_data = context.user_data["current_workout"]
+        logger.info(f"Skip handler triggered for user {user_id}")
+        workout_data = context.user_data.get("current_workout")
+        if (
+            not workout_data
+            or "exercises" not in workout_data
+            or not workout_data["exercises"]
+        ):
+            logger.info(f"Skip aborted: no workout data")
+            return WORKOUT_EXERCISE_CONFIRM
+        logger.info(f"Skipping exercise at index {workout_data['current_index']}")
         current_idx = workout_data["current_index"]
         workout_data["exercises"].pop(current_idx)
         if "logged_sets" in workout_data:
@@ -476,6 +507,8 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
             return ConversationHandler.END
         if current_idx >= num_exercises:
             workout_data["current_index"] = num_exercises - 1
+        else:
+            workout_data["current_index"] = max(0, current_idx - 1)
         keyboard = []
         for idx, ex in enumerate(workout_data["exercises"]):
             keyboard.append(
@@ -719,11 +752,13 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
                 await session.commit()
 
         workout_data["current_index"] = exercise_idx + 1
-        await process_next_exercise(query.message, context, user_id)
-        return WORKOUT_EXERCISE_CONFIRM
+        return await process_next_exercise(query.message, context, user_id)
 
     if data == "end_workout":
-        context.user_data.clear()
+        context.user_data.pop("current_workout", None)
+        context.user_data.pop("selected_exercise", None)
+        context.user_data.pop("exercise_history", None)
+        context.user_data.pop("waiting_for_add_exercise", None)
         await query.message.edit_text(
             "Workout ended. Great effort! 💪\n/start_workout to begin a new workout."
         )
@@ -751,6 +786,7 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
             workout_data["logged_sets"] = new_logged_sets
         num_exercises = len(workout_data["exercises"])
         if num_exercises == 0:
+            await query.answer()
             context.user_data.clear()
             await query.message.edit_text("Workout complete! Great job! 🎉")
             return ConversationHandler.END
@@ -790,7 +826,6 @@ async def handle_weight_select(
     update: Update, context: ContextTypes.DEFAULT_TYPE, user_id
 ):
     query = update.callback_query
-    await query.answer()
     data = query.data
 
     if data == "w_back":
@@ -825,7 +860,6 @@ async def handle_reps_select(
     update: Update, context: ContextTypes.DEFAULT_TYPE, user_id
 ):
     query = update.callback_query
-    await query.answer()
     data = query.data
 
     if data == "r_custom":

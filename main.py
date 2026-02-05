@@ -21,6 +21,7 @@ from handlers import (
     start_workout,
     select_template,
     select_exercise,
+    end_workout_callback,
     handle_exercise_action,
     log_exercise,
     history,
@@ -82,14 +83,17 @@ def main():
         entry_points=[CommandHandler("start_workout", start_workout)],
         states={
             WORKOUT_TEMPLATE_SELECT: [
-                CallbackQueryHandler(select_template, pattern="^tmpl_")
+                CallbackQueryHandler(select_template, pattern="^tmpl_"),
+                CallbackQueryHandler(end_workout_callback, pattern="^end_workout$"),
             ],
             WORKOUT_EXERCISE_SELECT: [
-                CallbackQueryHandler(select_exercise, pattern="^ex_")
+                CallbackQueryHandler(select_exercise, pattern="^ex_"),
+                CallbackQueryHandler(end_workout_callback, pattern="^end_workout$"),
             ],
             WORKOUT_EXERCISE_CONFIRM: [CallbackQueryHandler(handle_exercise_action)],
             WORKOUT_EXERCISE_INPUT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, log_exercise)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, log_exercise),
+                CallbackQueryHandler(handle_exercise_action),
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
@@ -109,7 +113,7 @@ def main():
     application.add_handler(
         CallbackQueryHandler(
             handle_exercise_action,
-            pattern="^(confirm|rest|skip|log_set_|edit_set_|complete_|w_|r_|end_workout|add_exercise|remove_exercise_|use_defaults|use_existing_values|edit_weight|edit_reps)",
+            pattern="^(skip|rest|confirm|w_|r_)",
         )
     )
 
