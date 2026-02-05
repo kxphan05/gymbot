@@ -354,7 +354,7 @@ async def handle_edit_exercise_action(
 
     if data == "etadd":
         await query.message.reply_text(
-            "Enter new exercise name (format: 'Name'):\nExample: 'Pushups'"
+            "Enter new exercise name (format: 'Name'):\nExample: 'Pushups 3 0 15'"
         )
         return EDIT_EXERCISE_NAME
 
@@ -770,13 +770,31 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
     logger.info(f"handle_exercise_action: data={data}")
 
     if data == "rest":
-        await query.message.reply_text("Rest timer started: 5 minutes. ⏳")
-        context.job_queue.run_once(
+        await query.message.reply_text(
+            "Rest timer started: 5 minutes. ⏳\n\n"
+            "Click 'Skip Rest' to cancel and continue.",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("Skip Rest ⏭️", callback_data="cancel_rest")]]
+            ),
+        )
+        job = context.job_queue.run_once(
             rest_timer_callback, 300, chat_id=query.message.chat_id
         )
+        context.user_data["rest_job"] = job
+        return WORKOUT_EXERCISE_CONFIRM
+
+    if data == "cancel_rest":
+        job = context.user_data.pop("rest_job", None)
+        if job:
+            job.schedule_removal()
+        try:
+            await query.message.edit_text("Rest timer canceled. Let's go! 💪")
+        except Exception:
+            pass
         return WORKOUT_EXERCISE_CONFIRM
 
     if data == "skip":
+        context.user_data.pop("rest_job", None)
         logger.info(f"Skip handler triggered for user {user_id}")
         workout_data = context.user_data.get("current_workout")
         if (
@@ -831,6 +849,7 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
         return WORKOUT_EXERCISE_SELECT
 
     if data.startswith("log_set_"):
+        context.user_data.pop("rest_job", None)
         parts = data.split("_")
         exercise_idx = int(parts[2])
         set_num = int(parts[3])
@@ -942,6 +961,7 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
         return WORKOUT_EXERCISE_INPUT
 
     if data.startswith("edit_set_"):
+        context.user_data.pop("rest_job", None)
         parts = data.split("_")
         exercise_idx = int(parts[2])
         set_num = int(parts[3])
@@ -1032,6 +1052,7 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
         return WORKOUT_EXERCISE_CONFIRM
 
     if data.startswith("complete_"):
+        context.user_data.pop("rest_job", None)
         exercise_idx = int(data.split("_")[1])
         workout_data = context.user_data["current_workout"]
         ex_data = workout_data["exercises"][exercise_idx]
@@ -1049,7 +1070,28 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
                 session.add(log)
                 await session.commit()
 
-        workout_data["current_index"] = exercise_idx + 1
+        workout_data["exercises"].pop(exercise_idx)
+        if "logged_sets" in workout_data:
+            workout_data["logged_sets"].pop(exercise_idx, None)
+            new_logged_sets = {}
+            for old_idx, sets in workout_data["logged_sets"].items():
+                if old_idx < exercise_idx:
+                    new_logged_sets[old_idx] = sets
+                elif old_idx > exercise_idx:
+                    new_logged_sets[old_idx - 1] = sets
+            workout_data["logged_sets"] = new_logged_sets
+
+        num_exercises = len(workout_data["exercises"])
+        if num_exercises == 0:
+            context.user_data.clear()
+            await query.message.edit_text("Workout complete! Great job! 🎉")
+            return ConversationHandler.END
+
+        if exercise_idx >= num_exercises:
+            workout_data["current_index"] = num_exercises - 1
+        else:
+            workout_data["current_index"] = exercise_idx
+
         return await process_next_exercise(query.message, context, user_id)
 
     if data == "back_to_exercise":
@@ -1082,6 +1124,7 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
         return WORKOUT_EXERCISE_CONFIRM
 
     if data == "end_workout":
+        context.user_data.pop("rest_job", None)
         context.user_data.pop("current_workout", None)
         context.user_data.pop("selected_exercise", None)
         context.user_data.pop("exercise_history", None)
@@ -1094,7 +1137,7 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
     if data == "add_exercise":
         context.user_data["waiting_for_add_exercise"] = True
         await query.message.edit_text(
-            "Enter exercise name to add (format: 'Name'):\nExample: 'Pushups'"
+            "Enter exercise name to add (format: 'Name'):\nExample: 'Pushups 3 0 15'"
         )
         return WORKOUT_EXERCISE_INPUT
 

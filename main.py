@@ -101,6 +101,7 @@ def main():
             WORKOUT_EXERCISE_SELECT: [
                 CallbackQueryHandler(select_exercise, pattern="^ex_"),
                 CallbackQueryHandler(end_workout_callback, pattern="^end_workout$"),
+                CallbackQueryHandler(handle_exercise_action, pattern="^add_exercise$"),
             ],
             WORKOUT_EXERCISE_CONFIRM: [CallbackQueryHandler(handle_exercise_action)],
             WORKOUT_EXERCISE_INPUT: [
@@ -148,7 +149,7 @@ def main():
     application.add_handler(
         CallbackQueryHandler(
             handle_exercise_action,
-            pattern="^(skip|rest|back_to_exercise|confirm|w_|r_)",
+            pattern="^(skip|rest|back_to_exercise|confirm|cancel_rest|w_|r_)",
         )
     )
 
