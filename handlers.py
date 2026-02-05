@@ -27,7 +27,12 @@ logger = logging.getLogger(__name__)
     WORKOUT_EXERCISE_CONFIRM,
     WORKOUT_EXERCISE_INPUT,
     EXERCISE_SETS_INPUT,
-) = range(8)
+    EDIT_TEMPLATE_SELECT,
+    EDIT_TEMPLATE_EXERCISE,
+    EDIT_TEMPLATE_NAME,
+    EDIT_EXERCISE_NAME,
+    EDIT_EXERCISE_DETAILS,
+) = range(13)
 
 WEIGHT_KEYBOARD = InlineKeyboardMarkup(
     [
@@ -123,6 +128,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Welcome to GymBot! 💪\n"
         "Commands:\n"
         "/create_template - Create a new workout routine\n"
+        "/edit_template - Edit an existing template\n"
         "/start_workout - Start logging a workout\n"
         "/history - View workout calendar"
     )
@@ -258,6 +264,288 @@ async def done_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"done_handler called: user_data keys = {list(context.user_data.keys())}"
     )
     return await save_template(update, context)
+
+
+async def edit_template_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start editing a template - list all templates for user to select."""
+    user_id = update.effective_user.id
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Template).where(Template.user_id == user_id)
+        )
+        templates = result.scalars().all()
+
+    if not templates:
+        await update.message.reply_text(
+            "No templates found. Use /create_template to add one first!"
+        )
+        return ConversationHandler.END
+
+    keyboard = [
+        [InlineKeyboardButton(t.name, callback_data=f"etmpl_{t.id}")] for t in templates
+    ]
+    await update.message.reply_text(
+        "Select a template to edit:", reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return EDIT_TEMPLATE_SELECT
+
+
+async def select_template_to_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle template selection for editing."""
+    query = update.callback_query
+    await query.answer()
+
+    template_id = int(query.data.split("_")[1])
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Template)
+            .where(Template.id == template_id)
+            .options(selectinload(Template.exercises))
+        )
+        template = result.scalar_one()
+        exercises = sorted(template.exercises, key=lambda x: x.order)
+
+    context.user_data["editing_template_id"] = template_id
+    context.user_data["editing_template_name"] = template.name
+    context.user_data["editing_exercises"] = [
+        {
+            "id": ex.id,
+            "name": ex.exercise_name,
+            "sets": ex.default_sets,
+            "weight": ex.default_weight,
+            "reps": ex.default_reps,
+        }
+        for ex in exercises
+    ]
+
+    keyboard = []
+    for idx, ex in enumerate(context.user_data["editing_exercises"]):
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    f"✏️ {ex['name']} ({ex['sets']}x{ex['weight']}kgx{ex['reps']})",
+                    callback_data=f"etedit_{idx}",
+                ),
+                InlineKeyboardButton("❌", callback_data=f"etrm_{idx}"),
+            ]
+        )
+    keyboard.append([InlineKeyboardButton("➕ Add Exercise", callback_data="etadd")])
+    keyboard.append(
+        [InlineKeyboardButton("📝 Rename Template", callback_data="etrname")]
+    )
+    keyboard.append([InlineKeyboardButton("💾 Save & Exit", callback_data="etsave")])
+
+    await query.edit_message_text(
+        f"Editing: {template.name}\n\nSelect an exercise to edit or add new ones:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    return EDIT_TEMPLATE_EXERCISE
+
+
+async def handle_edit_exercise_action(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+):
+    """Handle exercise editing actions."""
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data == "etadd":
+        await query.message.reply_text(
+            "Enter new exercise name (format: 'Name'):\nExample: 'Pushups'"
+        )
+        return EDIT_EXERCISE_NAME
+
+    if data == "etrname":
+        await query.message.reply_text("Enter new template name:")
+        return EDIT_TEMPLATE_NAME
+
+    if data == "etsave":
+        return await save_edited_template(update, context)
+
+    if data.startswith("etedit_"):
+        idx = int(data.split("_")[1])
+        ex = context.user_data["editing_exercises"][idx]
+        context.user_data["editing_exercise_idx"] = idx
+        await query.message.reply_text(
+            f"Editing: {ex['name']}\n"
+            f"Current: {ex['sets']} sets x {ex['weight']}kg x {ex['reps']} reps\n\n"
+            f"Enter new details (sets weight reps) or /skip to keep current:"
+        )
+        return EDIT_EXERCISE_DETAILS
+
+    if data.startswith("etrm_"):
+        idx = int(data.split("_")[1])
+        removed = context.user_data["editing_exercises"].pop(idx)
+        await query.message.reply_text(f"Removed {removed['name']} from template.")
+        return await show_edited_template(update, context, query.message)
+
+    return EDIT_TEMPLATE_EXERCISE
+
+
+async def edit_exercise_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle adding new exercise name during template editing."""
+    text = update.message.text.strip()
+    context.user_data["new_exercise_name"] = text
+    await update.message.reply_text(
+        f"Enter details for {text} (sets weight reps):\nExample: '3 50 10'"
+    )
+    return EDIT_EXERCISE_DETAILS
+
+
+async def edit_exercise_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle exercise details during template editing."""
+    text = update.message.text.strip()
+
+    if text.lower() == "/skip":
+        await update.message.reply_text("Exercise details unchanged.")
+        return await show_edited_template(update, context, update.message)
+
+    parts = text.split()
+
+    if len(parts) != 3:
+        await update.message.reply_text(
+            "Invalid format. Please enter 'Sets Weight Reps':"
+        )
+        return EDIT_EXERCISE_DETAILS
+
+    try:
+        sets = int(parts[0])
+        weight = float(parts[1])
+        reps = int(parts[2])
+        if sets <= 0 or reps <= 0:
+            raise ValueError("Values must be positive")
+    except ValueError:
+        await update.message.reply_text(
+            "Invalid format. Please enter positive numbers:"
+        )
+        return EDIT_EXERCISE_DETAILS
+
+    exercise_idx = context.user_data.get("editing_exercise_idx")
+    if exercise_idx is not None:
+        context.user_data["editing_exercises"][exercise_idx].update(
+            {
+                "name": context.user_data.get(
+                    "new_exercise_name",
+                    context.user_data["editing_exercises"][exercise_idx]["name"],
+                ),
+                "sets": sets,
+                "weight": weight,
+                "reps": reps,
+            }
+        )
+        context.user_data.pop("editing_exercise_idx", None)
+        await update.message.reply_text("Exercise updated!")
+    else:
+        context.user_data["editing_exercises"].append(
+            {
+                "name": context.user_data["new_exercise_name"],
+                "sets": sets,
+                "weight": weight,
+                "reps": reps,
+            }
+        )
+        context.user_data.pop("new_exercise_name", None)
+        await update.message.reply_text("Exercise added!")
+
+    return await show_edited_template(update, context, update.message)
+
+
+async def edit_template_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle template renaming."""
+    context.user_data["editing_template_name"] = update.message.text.strip()
+    await update.message.reply_text("Template renamed!")
+    return await show_edited_template(update, context, update.message)
+
+
+async def show_edited_template(update, context, message):
+    """Show the current state of the edited template."""
+    keyboard = []
+    for idx, ex in enumerate(context.user_data["editing_exercises"]):
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    f"✏️ {ex['name']} ({ex['sets']}x{ex['weight']}kgx{ex['reps']})",
+                    callback_data=f"etedit_{idx}",
+                ),
+                InlineKeyboardButton("❌", callback_data=f"etrm_{idx}"),
+            ]
+        )
+    keyboard.append([InlineKeyboardButton("➕ Add Exercise", callback_data="etadd")])
+    keyboard.append(
+        [InlineKeyboardButton("📝 Rename Template", callback_data="etrname")]
+    )
+    keyboard.append([InlineKeyboardButton("💾 Save & Exit", callback_data="etsave")])
+
+    await message.reply_text(
+        f"Editing: {context.user_data['editing_template_name']}\n\n"
+        f"Exercises: {len(context.user_data['editing_exercises'])}",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    return EDIT_TEMPLATE_EXERCISE
+
+
+async def save_edited_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Save the edited template."""
+    query = update.callback_query
+    await query.answer()
+
+    template_id = context.user_data.get("editing_template_id")
+    name = context.user_data.get("editing_template_name", "Unnamed Template")
+    exercises = context.user_data.get("editing_exercises", [])
+
+    if not exercises:
+        await query.message.reply_text("Cannot save template with no exercises.")
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Template).where(Template.id == template_id)
+            )
+            template = result.scalar_one()
+
+            template.name = name
+            await session.flush()
+
+            await session.execute(
+                TemplateExercise.__table__.delete().where(
+                    TemplateExercise.template_id == template_id
+                )
+            )
+            await session.flush()
+
+            for idx, ex_data in enumerate(exercises):
+                ex = TemplateExercise(
+                    template_id=template.id,
+                    exercise_name=ex_data["name"],
+                    default_sets=ex_data["sets"],
+                    default_weight=ex_data["weight"],
+                    default_reps=ex_data["reps"],
+                    order=idx,
+                )
+                session.add(ex)
+
+            await session.commit()
+            await query.message.edit_text(
+                f"Template '{name}' saved with {len(exercises)} exercises! ✅"
+            )
+    except Exception as e:
+        logger.error(f"Error saving template: {e}")
+        await query.message.reply_text("Error saving template. Please try again.")
+
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+async def cancel_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel template editing."""
+    context.user_data.clear()
+    await update.message.reply_text("Template editing canceled.")
+    return ConversationHandler.END
 
 
 async def end_workout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -767,7 +1055,7 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
     if data == "add_exercise":
         context.user_data["waiting_for_add_exercise"] = True
         await query.message.edit_text(
-            "Enter exercise name to add (format: 'Name sets weight reps'):\nExample: 'Pushups 3 0 15'"
+            "Enter exercise name to add (format: 'Name'):\nExample: 'Pushups'"
         )
         return WORKOUT_EXERCISE_INPUT
 

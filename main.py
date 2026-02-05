@@ -34,6 +34,18 @@ from handlers import (
     WORKOUT_EXERCISE_SELECT,
     WORKOUT_EXERCISE_CONFIRM,
     WORKOUT_EXERCISE_INPUT,
+    edit_template_start,
+    select_template_to_edit,
+    handle_edit_exercise_action,
+    edit_exercise_name,
+    edit_exercise_details,
+    edit_template_name,
+    cancel_edit,
+    EDIT_TEMPLATE_SELECT,
+    EDIT_TEMPLATE_EXERCISE,
+    EDIT_TEMPLATE_NAME,
+    EDIT_EXERCISE_NAME,
+    EDIT_EXERCISE_DETAILS,
 )
 from database import init_db
 from dotenv import load_dotenv
@@ -99,9 +111,32 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
+    edit_template_conv = ConversationHandler(
+        entry_points=[CommandHandler("edit_template", edit_template_start)],
+        states={
+            EDIT_TEMPLATE_SELECT: [
+                CallbackQueryHandler(select_template_to_edit, pattern="^etmpl_"),
+            ],
+            EDIT_TEMPLATE_EXERCISE: [
+                CallbackQueryHandler(handle_edit_exercise_action),
+            ],
+            EDIT_TEMPLATE_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_template_name),
+            ],
+            EDIT_EXERCISE_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_exercise_name),
+            ],
+            EDIT_EXERCISE_DETAILS: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_exercise_details),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_edit)],
+    )
+
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("history", history))
     application.add_handler(create_template_conv)
+    application.add_handler(edit_template_conv)
     application.add_handler(workout_conv)
 
     application.add_handler(
