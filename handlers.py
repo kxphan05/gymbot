@@ -1665,8 +1665,11 @@ async def log_exercise(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def rest_timer_callback(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
-    rest_message_id = context.user_data.pop("rest_message_id", None)
-    context.user_data.pop("rest_job", None)
+    try:
+        rest_message_id = context.user_data["rest_message_id"]
+    except KeyError:
+        rest_message_id = None
+    context.user_data["rest_job"] = None
     if rest_message_id:
         try:
             await context.bot.delete_message(job.chat_id, rest_message_id)
