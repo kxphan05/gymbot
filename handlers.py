@@ -792,7 +792,7 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
     logger.info(f"handle_exercise_action: data={data}")
 
     if data == "rest":
-        await query.message.reply_text(
+        rest_message = await query.message.reply_text(
             "Rest timer started: 5 minutes. ⏳\n\n"
             "Click 'Skip Rest' to cancel and continue.",
             reply_markup=InlineKeyboardMarkup(
@@ -803,14 +803,19 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
             rest_timer_callback, 300, chat_id=query.message.chat_id
         )
         context.user_data["rest_job"] = job
+        context.user_data["rest_message_id"] = rest_message.message_id
         return WORKOUT_EXERCISE_CONFIRM
 
     if data == "cancel_rest":
         job = context.user_data.pop("rest_job", None)
         if job:
             job.schedule_removal()
+        rest_message_id = context.user_data.pop("rest_message_id", None)
         try:
-            await query.message.edit_text("Rest timer canceled. Let's go! 💪")
+            if rest_message_id:
+                await context.bot.delete_message(query.message.chat_id, rest_message_id)
+            else:
+                await query.message.edit_text("Rest timer canceled. Let's go! 💪")
         except Exception:
             pass
         return WORKOUT_EXERCISE_CONFIRM
@@ -1511,9 +1516,13 @@ async def log_exercise(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def rest_timer_callback(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
-    await context.bot.send_message(
-        job.chat_id, text="Rest time over! 🔔 Get back to work!"
-    )
+    rest_message_id = context.user_data.pop("rest_message_id", None)
+    context.user_data.pop("rest_job", None)
+    if rest_message_id:
+        try:
+            await context.bot.delete_message(job.chat_id, rest_message_id)
+        except Exception:
+            pass
 
 
 async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):

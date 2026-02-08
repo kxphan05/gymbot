@@ -6,6 +6,7 @@ from handlers import (
     template_name,
     exercise_name,
     show_edited_template,
+    rest_timer_callback,
 )
 from telegram.ext import ConversationHandler
 
@@ -102,3 +103,34 @@ async def test_volume_calculation_zero_weight(mock_update, mock_context):
         button.text for row in reply_markup.inline_keyboard for button in row
     ]
     assert any("Pull-ups (3x0.0kgx10) - 0.0kg vol" in text for text in button_texts)
+
+
+@pytest.mark.asyncio
+async def test_rest_timer_callback_deletes_message(mock_context):
+    """Test that rest timer callback deletes the rest message."""
+    mock_context.user_data = {
+        "rest_message_id": 123,
+        "rest_job": MagicMock(),
+    }
+    mock_context.job = MagicMock()
+    mock_context.job.chat_id = 12345
+    mock_context.bot = AsyncMock()
+
+    await rest_timer_callback(mock_context)
+
+    mock_context.bot.delete_message.assert_called_once_with(12345, 123)
+    assert "rest_message_id" not in mock_context.user_data
+    assert "rest_job" not in mock_context.user_data
+
+
+@pytest.mark.asyncio
+async def test_rest_timer_callback_handles_missing_message(mock_context):
+    """Test that rest timer callback handles missing message gracefully."""
+    mock_context.user_data = {}
+    mock_context.job = MagicMock()
+    mock_context.job.chat_id = 12345
+    mock_context.bot = AsyncMock()
+
+    await rest_timer_callback(mock_context)
+
+    mock_context.bot.delete_message.assert_not_called()
