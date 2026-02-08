@@ -10,7 +10,7 @@ from telegram.ext import (
     filters,
     CallbackQueryHandler,
 )
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, update
 from sqlalchemy.orm import selectinload
 from database import AsyncSessionLocal, User, Template, TemplateExercise, WorkoutLog
 
@@ -922,10 +922,15 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
         return WORKOUT_EXERCISE_CONFIRM
 
     if data == "cancel_rest":
-        job = context.user_data.pop("rest_job", None)
+        user_data = context.user_data
+        if user_data is None:
+            # Manually fetch the user_data from the application's storage
+            user_id = update.effective_user.id
+            user_data = context.application.user_data[user_id]
+        job = user_data.pop("rest_job", None)
         if job:
             job.schedule_removal()
-        rest_message_id = context.user_data.pop("rest_message_id", None)
+        rest_message_id = user_data.pop("rest_message_id", None)
         try:
             if rest_message_id:
                 await context.bot.delete_message(query.message.chat_id, rest_message_id)
@@ -936,9 +941,14 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
         return WORKOUT_EXERCISE_CONFIRM
 
     if data == "skip":
-        context.user_data.pop("rest_job", None)
+        user_data = context.user_data
+        if user_data is None:
+            # Manually fetch the user_data from the application's storage
+            user_id = update.effective_user.id
+            user_data = context.application.user_data[user_id]
+        user_data.pop("rest_job", None)
         logger.info(f"Skip handler triggered for user {user_id}")
-        workout_data = context.user_data.get("current_workout")
+        workout_data = user_data.get("current_workout")
         if (
             not workout_data
             or "exercises" not in workout_data
@@ -1657,8 +1667,13 @@ async def log_exercise(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return WORKOUT_EXERCISE_CONFIRM
 
 
-async def rest_timer_callback(context: ContextTypes.DEFAULT_TYPE):
-    rest_message_id = context.user_data.pop("rest_message_id", None)
+async def rest_timer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_data = context.user_data
+    if user_data is None:
+        # Manually fetch the user_data from the application's storage
+        user_id = update.effective_user.id
+        user_data = context.application.user_data[user_id]
+    rest_message_id = user_data.pop("rest_message_id", None)
     job = context.job
     if rest_message_id:
         try:
