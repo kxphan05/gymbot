@@ -53,6 +53,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -152,8 +153,13 @@ def main():
             pattern="^(skip|rest|back_to_exercise|confirm|cancel_rest|w_|r_)",
         )
     )
-
-    application.run_polling()
+    
+    application.run_webhook(
+        listen="::",
+        port=8080,
+        url_path=f"{TOKEN}",
+        webhook_url=f"{WEBHOOK_URL}/{TOKEN}",
+    )
 
 
 async def post_init(application):
