@@ -123,6 +123,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user = User(id=user_id, username=username)
             session.add(user)
             await session.commit()
+        else:
+            context.user_data["default_rest_seconds"] = user.default_rest_seconds
 
     await update.message.reply_text(
         "Welcome to GymBot! 💪\n"
@@ -130,8 +132,104 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/create_template - Create a new workout routine\n"
         "/edit_template - Edit an existing template\n"
         "/start_workout - Start logging a workout\n"
-        "/history - View workout calendar"
+        "/history - View workout calendar\n"
+        "/settings - Change your settings"
     )
+
+
+SETTINGS_REST, SETTINGS_REST_CONFIRM = range(20, 22)
+
+
+async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show user settings and options to change them."""
+    user_id = update.effective_user.id
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        default_rest = user.default_rest_seconds if user else 300
+
+    minutes = default_rest // 60
+    seconds = default_rest % 60
+    if seconds > 0:
+        rest_text = f"{minutes}m{seconds}s"
+    else:
+        rest_text = f"{minutes}m"
+
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    f"⏰ Rest Time: {rest_text}", callback_data="set_rest"
+                )
+            ],
+        ]
+    )
+
+    await update.message.reply_text(
+        f"⚙️ Your Settings:\n\nDefault Rest Time: {rest_text}\n\nTap below to change:",
+        reply_markup=keyboard,
+    )
+
+
+async def settings_rest(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Prompt for new rest time."""
+    query = update.callback_query
+    await query.answer()
+
+    await query.edit_message_text(
+        "Enter your default rest time in seconds (e.g., 90 for 1:30, 180 for 3m):"
+    )
+    return SETTINGS_REST_CONFIRM
+
+
+async def settings_rest_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Save the new rest time."""
+    text = update.message.text.strip()
+    user_id = update.effective_user.id
+
+    try:
+        rest_seconds = int(text)
+        if rest_seconds <= 0 or rest_seconds > 600:
+            await update.message.reply_text(
+                "Please enter between 1-600 seconds (10 minutes max)."
+            )
+            return SETTINGS_REST_CONFIRM
+    except ValueError:
+        await update.message.reply_text("Invalid number. Enter seconds (e.g., 90):")
+        return SETTINGS_REST_CONFIRM
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if user:
+            user.default_rest_seconds = rest_seconds
+            await session.commit()
+
+    context.user_data["default_rest_seconds"] = rest_seconds
+
+    minutes = rest_seconds // 60
+    seconds = rest_seconds % 60
+    if seconds > 0:
+        rest_text = f"{minutes}m{seconds}s"
+    else:
+        rest_text = f"{minutes}m"
+
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    f"⏰ Rest Time: {rest_text}", callback_data="set_rest"
+                )
+            ],
+        ]
+    )
+
+    await update.message.reply_text(
+        f"✅ Default rest time updated to {rest_text}!",
+        reply_markup=keyboard,
+    )
+    return ConversationHandler.END
 
 
 async def create_template_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -686,8 +784,17 @@ async def select_exercise(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return WORKOUT_EXERCISE_CONFIRM
 
 
-def build_set_keyboard(exercise_idx, ex_data, logged_sets, is_completed=False):
+def build_set_keyboard(exercise_idx, ex_data, logged_sets, context, is_completed=False):
     """Build keyboard with individual set buttons."""
+    rest_seconds = context.user_data.get("default_rest_seconds", 300)
+    rest_seconds = 300 if rest_seconds is None else rest_seconds
+    minutes = rest_seconds // 60
+    seconds = rest_seconds % 60
+    if seconds > 0:
+        rest_text = f"{minutes}m{seconds}s"
+    else:
+        rest_text = f"{minutes}m"
+
     keyboard = []
     total_sets = ex_data["default_sets"]
     default_weight = ex_data["default_weight"]
@@ -723,7 +830,7 @@ def build_set_keyboard(exercise_idx, ex_data, logged_sets, is_completed=False):
     keyboard.extend(
         [
             [InlineKeyboardButton("⬅️ Back", callback_data="back_to_exercise")],
-            [InlineKeyboardButton("⏰ Rest 5m", callback_data="rest")],
+            [InlineKeyboardButton(f"⏰ Rest {rest_text}", callback_data="rest")],
             [InlineKeyboardButton("⏰ Custom Rest", callback_data="custom_rest")],
             [InlineKeyboardButton("Skip Exercise ➡️", callback_data="skip")],
         ]
@@ -770,7 +877,7 @@ async def process_next_exercise(message, context, user_id):
         f"Previous: {prev_log_text}"
     )
 
-    keyboard = build_set_keyboard(idx, ex_data, logged_sets, is_completed)
+    keyboard = build_set_keyboard(idx, ex_data, logged_sets, context, is_completed)
 
     logger.info(f"Sending exercise keyboard for {ex_data['name']}")
 
@@ -793,15 +900,23 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
     logger.info(f"handle_exercise_action: data={data}")
 
     if data == "rest":
+        rest_seconds = context.user_data.get("default_rest_seconds", 300)
+        rest_seconds = 300 if rest_seconds is None else rest_seconds
+        minutes = rest_seconds // 60
+        seconds = rest_seconds % 60
+        if seconds > 0:
+            rest_text = f"{minutes}m{seconds}s"
+        else:
+            rest_text = f"{minutes}m"
         rest_message = await query.message.reply_text(
-            "Rest timer started: 5 minutes. ⏳\n\n"
+            f"Rest timer started: {rest_text}. ⏳\n\n"
             "Click 'Skip Rest' to cancel and continue.",
             reply_markup=InlineKeyboardMarkup(
                 [[InlineKeyboardButton("Skip Rest ⏭️", callback_data="cancel_rest")]]
             ),
         )
         job = context.job_queue.run_once(
-            rest_timer_callback, 300, chat_id=query.message.chat_id
+            rest_timer_callback, rest_seconds, chat_id=query.message.chat_id
         )
         context.user_data["rest_job"] = job
         context.user_data["rest_message_id"] = rest_message.message_id
@@ -956,6 +1071,7 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
                 exercise_idx,
                 ex_data,
                 logged_sets,
+                context,
                 completed_count >= ex_data["default_sets"],
             ),
         )
@@ -1079,6 +1195,7 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
                 exercise_idx,
                 ex_data,
                 logged_sets,
+                context,
                 completed_count >= ex_data["default_sets"],
             ),
         )
@@ -1353,6 +1470,7 @@ async def handle_reps_select(
             exercise_idx,
             ex_data,
             logged_sets,
+            context,
             completed_count >= ex_data["default_sets"],
         ),
     )
@@ -1503,6 +1621,7 @@ async def log_exercise(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     exercise_idx,
                     ex_data,
                     logged_sets,
+                    context,
                     len(logged_sets) >= ex_data["default_sets"],
                 ),
             )

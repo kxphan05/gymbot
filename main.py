@@ -46,6 +46,11 @@ from handlers import (
     EDIT_TEMPLATE_NAME,
     EDIT_EXERCISE_NAME,
     EDIT_EXERCISE_DETAILS,
+    settings,
+    settings_rest,
+    settings_rest_confirm,
+    SETTINGS_REST,
+    SETTINGS_REST_CONFIRM,
 )
 from database import init_db
 from dotenv import load_dotenv
@@ -137,9 +142,21 @@ def main():
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("history", history))
+    application.add_handler(CommandHandler("settings", settings))
     application.add_handler(create_template_conv)
     application.add_handler(edit_template_conv)
     application.add_handler(workout_conv)
+
+    settings_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(settings_rest, pattern="^set_rest$")],
+        states={
+            SETTINGS_REST_CONFIRM: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, settings_rest_confirm)
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+    application.add_handler(settings_conv)
 
     application.add_handler(
         CallbackQueryHandler(history_detail_callback, pattern="^hist_")
@@ -150,10 +167,10 @@ def main():
     application.add_handler(
         CallbackQueryHandler(
             handle_exercise_action,
-            pattern="^(skip|rest|back_to_exercise|confirm|cancel_rest|w_|r_)",
+            pattern="^(skip|rest|back_to_exercise|confirm|cancel_rest|edit_set_|log_set_|custom_rest|w_|r_|use_defaults|use_existing_values|edit_weight|edit_reps|complete_)",
         )
     )
-    
+
     application.run_webhook(
         listen="0.0.0.0",
         port=8080,

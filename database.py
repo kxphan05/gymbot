@@ -23,6 +23,7 @@ class User(Base):
     __tablename__ = "users"
     id = Column(BigInteger, primary_key=True)
     username = Column(String, nullable=True)
+    default_rest_seconds = Column(Integer, default=300)  # 5 minutes default
 
     templates = relationship("Template", back_populates="user")
     logs = relationship("WorkoutLog", back_populates="user")
