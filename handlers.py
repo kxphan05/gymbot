@@ -972,14 +972,12 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
             exercise_idx
         ]
         default_reps = ex_data.get("default_reps", 0)
+        default_weight = ex_data.get("default_weight", 0)
         pending_weight = context.user_data.get("pending_weight")
 
         if pending_weight is None:
-            await query.message.edit_text(
-                f"Select weight first (default: {ex_data.get('default_weight', 0)}kg):",
-                reply_markup=WEIGHT_KEYBOARD,
-            )
-            return WORKOUT_EXERCISE_INPUT
+            context.user_data["pending_weight"] = default_weight
+            pending_weight = default_weight
 
         await query.message.edit_text(
             f"Weight: {pending_weight}kg\nSelect reps (default: {default_reps}):",
