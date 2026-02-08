@@ -915,7 +915,7 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
             ),
         )
         job = context.job_queue.run_once(
-            rest_timer_callback, rest_seconds, chat_id=query.message.chat_id
+            rest_timer_callback, rest_seconds, chat_id=query.message.chat_id, user_id=update.effective_user.id
         )
         context.user_data["rest_job"] = job
         context.user_data["rest_message_id"] = rest_message.message_id
@@ -1576,7 +1576,7 @@ async def log_exercise(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ),
             )
             job = context.job_queue.run_once(
-                rest_timer_callback, rest_seconds, chat_id=update.message.chat_id
+                rest_timer_callback, rest_seconds, chat_id=update.message.chat_id, user_id=update.effective_user.id
             )
             context.user_data["rest_job"] = job
             context.user_data["rest_message_id"] = rest_message.message_id
@@ -1667,12 +1667,8 @@ async def log_exercise(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return WORKOUT_EXERCISE_CONFIRM
 
 
-async def rest_timer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def rest_timer_callback(context: ContextTypes.DEFAULT_TYPE):
     user_data = context.user_data
-    if user_data is None:
-        # Manually fetch the user_data from the application's storage
-        user_id = update.effective_user.id
-        user_data = context.application.user_data[user_id]
     rest_message_id = user_data.pop("rest_message_id", None)
     job = context.job
     if rest_message_id:
