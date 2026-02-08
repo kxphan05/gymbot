@@ -922,7 +922,10 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
         return WORKOUT_EXERCISE_CONFIRM
 
     if data == "cancel_rest":
-        job = context.user_data.pop("rest_job", None)
+        try:
+            job = context.user_data["rest_job"]
+        except KeyError:
+            job = None
         if job:
             job.schedule_removal()
         rest_message_id = context.user_data.pop("rest_message_id", None)
