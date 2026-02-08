@@ -155,7 +155,7 @@ def main():
     )
     
     application.run_webhook(
-        listen="::",
+        listen="0.0.0.0",
         port=8080,
         url_path=f"{TOKEN}",
         webhook_url=f"{WEBHOOK_URL}/{TOKEN}",
