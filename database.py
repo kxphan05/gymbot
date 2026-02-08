@@ -12,6 +12,9 @@ from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.sql import func
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 Base = declarative_base()
 
@@ -72,6 +75,7 @@ class WorkoutLog(Base):
 DATABASE_URL = os.getenv(
     "DATABASE_URL", "postgresql+asyncpg://postgres:password@localhost/gymbot"
 )
+print("Using database URL:", DATABASE_URL)
 
 engine = create_async_engine(DATABASE_URL, echo=True, connect_args={"ssl": "require"})
 AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
