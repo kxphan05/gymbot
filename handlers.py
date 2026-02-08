@@ -928,7 +928,10 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
             job = None
         if job:
             job.schedule_removal()
-        rest_message_id = context.user_data.pop("rest_message_id", None)
+        try:
+            rest_message_id = context.user_data["rest_message_id"]
+        except KeyError:
+            rest_message_id = None
         try:
             if rest_message_id:
                 await context.bot.delete_message(query.message.chat_id, rest_message_id)
