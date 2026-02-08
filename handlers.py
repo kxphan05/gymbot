@@ -831,7 +831,6 @@ def build_set_keyboard(exercise_idx, ex_data, logged_sets, context, is_completed
         [
             [InlineKeyboardButton("⬅️ Back", callback_data="back_to_exercise")],
             [InlineKeyboardButton(f"⏰ Rest {rest_text}", callback_data="rest")],
-            [InlineKeyboardButton("⏰ Custom Rest", callback_data="custom_rest")],
             [InlineKeyboardButton("Skip Exercise ➡️", callback_data="skip")],
         ]
     )
@@ -921,13 +920,6 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
         context.user_data["rest_job"] = job
         context.user_data["rest_message_id"] = rest_message.message_id
         return WORKOUT_EXERCISE_CONFIRM
-
-    if data == "custom_rest":
-        await query.message.edit_text(
-            "Enter custom rest time in seconds (e.g., 90 for 1:30):"
-        )
-        context.user_data["waiting_for_custom_rest"] = True
-        return WORKOUT_EXERCISE_INPUT
 
     if data == "cancel_rest":
         job = context.user_data.pop("rest_job", None)
