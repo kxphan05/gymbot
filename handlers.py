@@ -660,7 +660,7 @@ async def select_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [
                 InlineKeyboardButton(
                     f"{ex['name']} ({ex['default_sets']}x{ex['default_weight']}kgx{ex['default_reps']} reps) - {volume}kg vol",
-                    callback_data=f"wo_ex_{idx}",
+                    callback_data=f"ex_{idx}",
                 ),
             ]
         )
