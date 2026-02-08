@@ -1676,6 +1676,11 @@ async def rest_timer_callback(context: ContextTypes.DEFAULT_TYPE):
             await context.bot.delete_message(job.chat_id, rest_message_id)
         except Exception:
             pass
+    await context.bot.send_message(
+        chat_id=job.chat_id, 
+        text="⏰ **Rest is over!** Get back to work uwu! 💪",
+        parse_mode="Markdown"
+    )
 
 
 async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
