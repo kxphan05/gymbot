@@ -371,7 +371,7 @@ async def handle_edit_exercise_action(
         context.user_data["editing_exercise_idx"] = idx
         await query.message.reply_text(
             f"Editing: {ex['name']}\n"
-            f"Current: {ex['sets']} sets x {ex['weight']}kg x {ex['reps']} reps\n\n"
+            f"Current: {ex['sets']} sets x {ex['weight']}kg x {ex['reps']} reps ({ex['sets'] * ex['weight'] * ex['reps']}kg vol)\n\n"
             f"Enter new details (sets weight reps) or /skip to keep current:"
         )
         return EDIT_EXERCISE_DETAILS
@@ -464,10 +464,11 @@ async def show_edited_template(update, context, message):
     """Show the current state of the edited template."""
     keyboard = []
     for idx, ex in enumerate(context.user_data["editing_exercises"]):
+        volume = ex["sets"] * ex["weight"] * ex["reps"]
         keyboard.append(
             [
                 InlineKeyboardButton(
-                    f"✏️ {ex['name']} ({ex['sets']}x{ex['weight']}kgx{ex['reps']})",
+                    f"✏️ {ex['name']} ({ex['sets']}x{ex['weight']}kgx{ex['reps']}) - {volume}kg vol",
                     callback_data=f"etedit_{idx}",
                 ),
                 InlineKeyboardButton("❌", callback_data=f"etrm_{idx}"),
@@ -653,14 +654,15 @@ async def select_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Show all exercises for selection
     keyboard = []
-    for idx, exercise in enumerate(exercises):
+    for idx, ex in enumerate(context.user_data["editing_exercises"]):
+        volume = ex["sets"] * ex["weight"] * ex["reps"]
         keyboard.append(
             [
                 InlineKeyboardButton(
-                    f"{idx + 1}. {exercise.exercise_name} ({exercise.default_sets} sets x {exercise.default_weight}kg x {exercise.default_reps} reps)",
-                    callback_data=f"ex_{idx}",
+                    f"✏️ {ex['name']} ({ex['sets']}x{ex['weight']}kgx{ex['reps']}) - {volume}kg vol",
+                    callback_data=f"etedit_{idx}",
                 ),
-                InlineKeyboardButton("❌", callback_data=f"remove_exercise_{idx}"),
+                InlineKeyboardButton("❌", callback_data=f"etrm_{idx}"),
             ]
         )
     keyboard.append(
@@ -1627,11 +1629,17 @@ async def history_detail_callback(update: Update, context: ContextTypes.DEFAULT_
     for log in logs:
         key = f"{log.exercise_name}"
         if key not in exercise_summary:
-            exercise_summary[key] = {"sets": 0, "weight": log.weight, "reps": log.reps}
+            exercise_summary[key] = {
+                "sets": 0,
+                "weight": log.weight,
+                "reps": log.reps,
+                "volume": 0,
+            }
         exercise_summary[key]["sets"] += 1
+        exercise_summary[key]["volume"] += log.sets * log.weight * log.reps
 
     for ex_name, ex_data in exercise_summary.items():
-        log_text += f"• {ex_name}: {ex_data['sets']} set(s) @ {ex_data['weight']}kg x {ex_data['reps']}\n"
+        log_text += f"• {ex_name}: {ex_data['sets']} set(s) @ {ex_data['weight']}kg x {ex_data['reps']} reps ({ex_data['volume']}kg vol)\n"
 
     keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="hist_back")]]
     await query.edit_message_text(log_text, reply_markup=InlineKeyboardMarkup(keyboard))
