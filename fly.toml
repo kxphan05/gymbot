@@ -1,0 +1,14 @@
+app = "gymbot-ulniea"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+
+[processes]
+  worker = "uv run python main.py" 
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 256
