@@ -654,22 +654,18 @@ async def select_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Show all exercises for selection
     keyboard = []
-    for idx, ex in enumerate(context.user_data["editing_exercises"]):
-        volume = ex["sets"] * ex["weight"] * ex["reps"]
+    for idx, ex in enumerate(context.user_data["current_workout"]["exercises"]):
+        volume = ex["default_sets"] * ex["default_weight"] * ex["default_reps"]
         keyboard.append(
             [
                 InlineKeyboardButton(
-                    f"✏️ {ex['name']} ({ex['sets']}x{ex['weight']}kgx{ex['reps']}) - {volume}kg vol",
-                    callback_data=f"etedit_{idx}",
+                    f"{ex['name']} ({ex['default_sets']}x{ex['default_weight']}kgx{ex['default_reps']} reps) - {volume}kg vol",
+                    callback_data=f"wo_ex_{idx}",
                 ),
-                InlineKeyboardButton("❌", callback_data=f"etrm_{idx}"),
             ]
         )
     keyboard.append(
         [InlineKeyboardButton("🛑 End Workout", callback_data="end_workout")]
-    )
-    keyboard.append(
-        [InlineKeyboardButton("➕ Add Exercise", callback_data="add_exercise")]
     )
 
     await query.edit_message_text(
