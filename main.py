@@ -8,6 +8,7 @@ from telegram.ext import (
     MessageHandler,
     filters,
     JobQueue,
+    PicklePersistence,
 )
 from handlers import (
     start,
@@ -59,6 +60,7 @@ load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+persistence = PicklePersistence(filepath='storage.pickle')
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -75,6 +77,7 @@ def main():
         .token(TOKEN)
         .post_init(post_init)
         .job_queue(JobQueue())
+        .persistence(persistence)
         .build()
     )
 

@@ -922,16 +922,10 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
         return WORKOUT_EXERCISE_CONFIRM
 
     if data == "cancel_rest":
-        try:
-            job = context.user_data["rest_job"]
-        except KeyError:
-            job = None
+        job = context.user_data.pop("rest_job", None)
         if job:
             job.schedule_removal()
-        try:
-            rest_message_id = context.user_data["rest_message_id"]
-        except KeyError:
-            rest_message_id = None
+        rest_message_id = context.user_data.pop("rest_message_id", None)
         try:
             if rest_message_id:
                 await context.bot.delete_message(query.message.chat_id, rest_message_id)
@@ -1664,12 +1658,8 @@ async def log_exercise(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def rest_timer_callback(context: ContextTypes.DEFAULT_TYPE):
+    rest_message_id = context.user_data.pop("rest_message_id", None)
     job = context.job
-    try:
-        rest_message_id = context.user_data["rest_message_id"]
-    except KeyError:
-        rest_message_id = None
-    context.user_data["rest_job"] = None
     if rest_message_id:
         try:
             await context.bot.delete_message(job.chat_id, rest_message_id)
