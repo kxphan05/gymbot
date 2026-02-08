@@ -724,6 +724,7 @@ def build_set_keyboard(exercise_idx, ex_data, logged_sets, is_completed=False):
         [
             [InlineKeyboardButton("⬅️ Back", callback_data="back_to_exercise")],
             [InlineKeyboardButton("⏰ Rest 5m", callback_data="rest")],
+            [InlineKeyboardButton("⏰ Custom Rest", callback_data="custom_rest")],
             [InlineKeyboardButton("Skip Exercise ➡️", callback_data="skip")],
         ]
     )
@@ -805,6 +806,13 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
         context.user_data["rest_job"] = job
         context.user_data["rest_message_id"] = rest_message.message_id
         return WORKOUT_EXERCISE_CONFIRM
+
+    if data == "custom_rest":
+        await query.message.edit_text(
+            "Enter custom rest time in seconds (e.g., 90 for 1:30):"
+        )
+        context.user_data["waiting_for_custom_rest"] = True
+        return WORKOUT_EXERCISE_INPUT
 
     if data == "cancel_rest":
         job = context.user_data.pop("rest_job", None)
@@ -1431,6 +1439,32 @@ async def log_exercise(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return WORKOUT_EXERCISE_INPUT
         except ValueError:
             await update.message.reply_text("Invalid weight. Enter a number:")
+            return WORKOUT_EXERCISE_INPUT
+
+    if context.user_data.get("waiting_for_custom_rest"):
+        try:
+            rest_seconds = int(text)
+            if rest_seconds <= 0:
+                raise ValueError
+            context.user_data.pop("waiting_for_custom_rest", None)
+
+            rest_message = await update.message.reply_text(
+                f"Rest timer started: {rest_seconds} seconds. ⏳\n\n"
+                "Click 'Skip Rest' to cancel and continue.",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("Skip Rest ⏭️", callback_data="cancel_rest")]]
+                ),
+            )
+            job = context.job_queue.run_once(
+                rest_timer_callback, rest_seconds, chat_id=update.message.chat_id
+            )
+            context.user_data["rest_job"] = job
+            context.user_data["rest_message_id"] = rest_message.message_id
+            return WORKOUT_EXERCISE_CONFIRM
+        except ValueError:
+            await update.message.reply_text(
+                "Invalid duration. Enter seconds (e.g., 90):"
+            )
             return WORKOUT_EXERCISE_INPUT
 
     if context.user_data.get("waiting_for_reps"):
