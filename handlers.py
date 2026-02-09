@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import json
 import logging
@@ -16,6 +17,8 @@ from database import AsyncSessionLocal, User, Template, TemplateExercise, Workou
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+last_msg_id = None
+last_chat_id = None
 
 
 (
@@ -93,18 +96,6 @@ REPS_KEYBOARD = InlineKeyboardMarkup(
             InlineKeyboardButton("12", callback_data="r_12"),
         ],
         [
-            InlineKeyboardButton("13", callback_data="r_13"),
-            InlineKeyboardButton("14", callback_data="r_14"),
-            InlineKeyboardButton("15", callback_data="r_15"),
-            InlineKeyboardButton("16", callback_data="r_16"),
-        ],
-        [
-            InlineKeyboardButton("17", callback_data="r_17"),
-            InlineKeyboardButton("18", callback_data="r_18"),
-            InlineKeyboardButton("19", callback_data="r_19"),
-            InlineKeyboardButton("20", callback_data="r_20"),
-        ],
-        [
             InlineKeyboardButton("Custom", callback_data="r_custom"),
             InlineKeyboardButton("⬅️ Back to Weight", callback_data="r_back"),
         ],
@@ -113,6 +104,8 @@ REPS_KEYBOARD = InlineKeyboardMarkup(
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global last_msg_id
+    global last_chat_id
     user_id = update.effective_user.id
     username = update.effective_user.username
 
@@ -135,6 +128,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/history - View workout calendar\n"
         "/settings - Change your settings"
     )
+    try:
+        if last_msg_id:
+            await context.bot.delete_message(
+                chat_id=update.message.chat_id, message_id=last_msg_id
+            )
+    except Exception as e:
+        print(f"Could not delete: {e}")
+    last_msg_id = update.message.message_id
 
 
 SETTINGS_REST, SETTINGS_REST_CONFIRM = range(20, 22)
@@ -174,17 +175,27 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def settings_rest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Prompt for new rest time."""
+    global last_msg_id
     query = update.callback_query
     await query.answer()
 
     await query.edit_message_text(
         "Enter your default rest time in seconds (e.g., 90 for 1:30, 180 for 3m):"
     )
+    if last_msg_id:
+        try:
+            await context.bot.delete_message(
+                chat_id=query.message.chat_id, message_id=last_msg_id
+            )
+        except Exception as e:
+            print(f"Could not delete: {e}")
+    last_msg_id = query.message.message_id
     return SETTINGS_REST_CONFIRM
 
 
 async def settings_rest_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Save the new rest time."""
+    global last_msg_id
     text = update.message.text.strip()
     user_id = update.effective_user.id
 
@@ -227,41 +238,88 @@ async def settings_rest_confirm(update: Update, context: ContextTypes.DEFAULT_TY
 
     await update.message.reply_text(
         f"✅ Default rest time updated to {rest_text}!",
-        reply_markup=keyboard,
     )
+    if last_msg_id:
+        try:
+            await context.bot.delete_message(
+                chat_id=update.message.chat_id, message_id=last_msg_id
+            )
+        except Exception as e:
+            print(f"Could not delete: {e}")
+    last_msg_id = update.message.message_id
     return ConversationHandler.END
 
 
 async def create_template_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global last_msg_id
     await update.message.reply_text(
         "Let's create a workout template. What specific name would you like to give this routine? (e.g., 'Leg Day')"
     )
+    if last_msg_id:
+        try:
+            await context.bot.delete_message(
+                chat_id=update.message.chat_id, message_id=last_msg_id
+            )
+        except Exception as e:
+            print(f"Could not delete: {e}")
+    last_msg_id = update.message.message_id
     return TEMPLATE_NAME
 
 
 async def template_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global last_msg_id
     name = update.message.text.strip()
     context.user_data["template_name"] = name
     context.user_data["exercises"] = []
-    await update.message.reply_text(
+    sent = await update.message.reply_text(
         f"Template '{name}' started. Enter the first exercise name (or /done to finish):"
     )
+    try:
+        if last_msg_id:
+            await context.bot.delete_message(
+                chat_id=update.message.chat_id, message_id=last_msg_id
+            )
+    except Exception as e:
+        print(f"Could not delete: {e}")
+    try:
+        await context.bot.delete_message(
+            chat_id=update.message.chat_id, message_id=update.message.message_id
+        )
+    except Exception as e:
+        print(f"Could not delete user message: {e}")
+    last_msg_id = sent.message_id
     return EXERCISE_NAME
 
 
 async def exercise_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global last_msg_id
     text = update.message.text
     if text.lower() == "/done":
         return await save_template(update, context)
 
     context.user_data["current_exercise_name"] = text.strip()
-    await update.message.reply_text(
+    sent = await update.message.reply_text(
         f"Enter default sets, weight (kg), and reps for {text} separated by space (e.g., '3 50 10'):"
     )
+    try:
+        if last_msg_id:
+            await context.bot.delete_message(
+                chat_id=update.message.chat_id, message_id=last_msg_id
+            )
+    except Exception as e:
+        print(f"Could not delete: {e}")
+    try:
+        await context.bot.delete_message(
+            chat_id=update.message.chat_id, message_id=update.message.message_id
+        )
+    except Exception as e:
+        print(f"Could not delete user message: {e}")
+    last_msg_id = sent.message_id
     return EXERCISE_DETAILS
 
 
 async def exercise_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global last_msg_id
     text = update.message.text
 
     if text.lower() == "/done":
@@ -270,9 +328,23 @@ async def exercise_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = text.split()
 
     if len(parts) != 3:
-        await update.message.reply_text(
+        sent = await update.message.reply_text(
             "Invalid format. Please enter 'Sets Weight Reps' (e.g., '3 50 10'):"
         )
+        try:
+            if last_msg_id:
+                await context.bot.delete_message(
+                    chat_id=update.message.chat_id, message_id=last_msg_id
+                )
+        except Exception as e:
+            print(f"Could not delete: {e}")
+        try:
+            await context.bot.delete_message(
+                chat_id=update.message.chat_id, message_id=update.message.message_id
+            )
+        except Exception as e:
+            print(f"Could not delete user message: {e}")
+        last_msg_id = sent.message_id
         return EXERCISE_DETAILS
 
     try:
@@ -283,9 +355,23 @@ async def exercise_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if sets <= 0 or reps <= 0:
             raise ValueError("Values must be positive")
     except ValueError:
-        await update.message.reply_text(
+        sent = await update.message.reply_text(
             "Invalid format. Please enter positive numbers for Sets and Reps (e.g., '3 50 10'):"
         )
+        try:
+            if last_msg_id:
+                await context.bot.delete_message(
+                    chat_id=update.message.chat_id, message_id=last_msg_id
+                )
+        except Exception as e:
+            print(f"Could not delete: {e}")
+        try:
+            await context.bot.delete_message(
+                chat_id=update.message.chat_id, message_id=update.message.message_id
+            )
+        except Exception as e:
+            print(f"Could not delete user message: {e}")
+        last_msg_id = sent.message_id
         return EXERCISE_DETAILS
 
     exercises = context.user_data.get("exercises", [])
@@ -299,13 +385,28 @@ async def exercise_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     context.user_data["exercises"] = exercises
 
-    await update.message.reply_text(
+    sent = await update.message.reply_text(
         "Exercise added. Enter next exercise name (or /done to finish):"
     )
+    try:
+        if last_msg_id:
+            await context.bot.delete_message(
+                chat_id=update.message.chat_id, message_id=last_msg_id
+            )
+    except Exception as e:
+        print(f"Could not delete: {e}")
+    try:
+        await context.bot.delete_message(
+            chat_id=update.message.chat_id, message_id=update.message.message_id
+        )
+    except Exception as e:
+        print(f"Could not delete user message: {e}")
+    last_msg_id = sent.message_id
     return EXERCISE_NAME
 
 
 async def save_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global last_msg_id
     user_id = update.effective_user.id
     name = context.user_data.get("template_name", "Unnamed Template")
     exercises_data = context.user_data.get("exercises", [])
@@ -338,20 +439,51 @@ async def save_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await session.commit()
             logger.info(f"Template saved successfully: {name}")
-            await update.message.reply_text(
+            sent = await update.message.reply_text(
                 f"Template '{name}' saved with {len(exercises_data)} exercises! ✅"
             )
         except Exception as e:
             await session.rollback()
             logger.error(f"Error saving template: {e}")
-            await update.message.reply_text("Error saving template. Please try again.")
+            sent = await update.message.reply_text(
+                "Error saving template. Please try again."
+            )
 
+    try:
+        if last_msg_id:
+            await context.bot.delete_message(
+                chat_id=update.message.chat_id, message_id=last_msg_id
+            )
+    except Exception as e:
+        print(f"Could not delete: {e}")
+    try:
+        await context.bot.delete_message(
+            chat_id=update.message.chat_id, message_id=update.message.message_id
+        )
+    except Exception as e:
+        print(f"Could not delete user message: {e}")
+    last_msg_id = sent.message_id
     context.user_data.clear()
     return ConversationHandler.END
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Action canceled.")
+    global last_msg_id
+    sent = await update.message.reply_text("Action canceled.")
+    try:
+        if last_msg_id:
+            await context.bot.delete_message(
+                chat_id=update.message.chat_id, message_id=last_msg_id
+            )
+    except Exception as e:
+        print(f"Could not delete: {e}")
+    try:
+        await context.bot.delete_message(
+            chat_id=update.message.chat_id, message_id=update.message.message_id
+        )
+    except Exception as e:
+        print(f"Could not delete user message: {e}")
+    last_msg_id = sent.message_id
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -449,6 +581,8 @@ async def handle_edit_exercise_action(
     query = update.callback_query
     await query.answer()
     data = query.data
+    global last_msg_id
+    last_msg_id = query.message.message_id
 
     if data == "etadd":
         await query.message.reply_text(
@@ -484,22 +618,141 @@ async def handle_edit_exercise_action(
 
 
 async def edit_exercise_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle adding new exercise name during template editing."""
+    global last_msg_id
     text = update.message.text.strip()
     context.user_data["new_exercise_name"] = text
-    await update.message.reply_text(
+    sent = await update.message.reply_text(
         f"Enter details for {text} (sets weight reps):\nExample: '3 50 10'"
     )
+    try:
+        if last_msg_id:
+            await context.bot.delete_message(
+                chat_id=update.message.chat_id, message_id=last_msg_id
+            )
+    except Exception as e:
+        print(f"Could not delete: {e}")
+    try:
+        await context.bot.delete_message(
+            chat_id=update.message.chat_id, message_id=update.message.message_id
+        )
+    except Exception as e:
+        print(f"Could not delete user message: {e}")
+    last_msg_id = sent.message_id
     return EDIT_EXERCISE_DETAILS
 
 
 async def edit_exercise_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle exercise details during template editing."""
+    global last_msg_id
     text = update.message.text.strip()
 
     if text.lower() == "/skip":
-        await update.message.reply_text("Exercise details unchanged.")
+        sent = await update.message.reply_text("Exercise details unchanged.")
+        try:
+            if last_msg_id:
+                await context.bot.delete_message(
+                    chat_id=update.message.chat_id, message_id=last_msg_id
+                )
+        except Exception as e:
+            print(f"Could not delete: {e}")
+        try:
+            await context.bot.delete_message(
+                chat_id=update.message.chat_id, message_id=update.message.message_id
+            )
+        except Exception as e:
+            print(f"Could not delete user message: {e}")
+        last_msg_id = sent.message_id
         return await show_edited_template(update, context, update.message)
+
+    parts = text.split()
+
+    if len(parts) != 3:
+        sent = await update.message.reply_text(
+            "Invalid format. Please enter 'Sets Weight Reps':"
+        )
+        try:
+            if last_msg_id:
+                await context.bot.delete_message(
+                    chat_id=update.message.chat_id, message_id=last_msg_id
+                )
+        except Exception as e:
+            print(f"Could not delete: {e}")
+        try:
+            await context.bot.delete_message(
+                chat_id=update.message.chat_id, message_id=update.message.message_id
+            )
+        except Exception as e:
+            print(f"Could not delete user message: {e}")
+        last_msg_id = sent.message_id
+        return EDIT_EXERCISE_DETAILS
+
+    try:
+        sets = int(parts[0])
+        weight = float(parts[1])
+        reps = int(parts[2])
+        if sets <= 0 or reps <= 0:
+            raise ValueError("Values must be positive")
+    except ValueError:
+        sent = await update.message.reply_text(
+            "Invalid format. Please enter positive numbers:"
+        )
+        try:
+            if last_msg_id:
+                await context.bot.delete_message(
+                    chat_id=update.message.chat_id, message_id=last_msg_id
+                )
+        except Exception as e:
+            print(f"Could not delete: {e}")
+        try:
+            await context.bot.delete_message(
+                chat_id=update.message.chat_id, message_id=update.message.message_id
+            )
+        except Exception as e:
+            print(f"Could not delete user message: {e}")
+        last_msg_id = sent.message_id
+        return EDIT_EXERCISE_DETAILS
+
+    exercise_idx = context.user_data.get("editing_exercise_idx")
+    if exercise_idx is not None:
+        context.user_data["editing_exercises"][exercise_idx].update(
+            {
+                "name": context.user_data.get(
+                    "new_exercise_name",
+                    context.user_data["editing_exercises"][exercise_idx]["name"],
+                ),
+                "sets": sets,
+                "weight": weight,
+                "reps": reps,
+            }
+        )
+        context.user_data.pop("editing_exercise_idx", None)
+        sent = await update.message.reply_text("Exercise updated!")
+    else:
+        context.user_data["editing_exercises"].append(
+            {
+                "name": context.user_data["new_exercise_name"],
+                "sets": sets,
+                "weight": weight,
+                "reps": reps,
+            }
+        )
+        context.user_data.pop("new_exercise_name", None)
+        sent = await update.message.reply_text("Exercise added!")
+
+    try:
+        if last_msg_id:
+            await context.bot.delete_message(
+                chat_id=update.message.chat_id, message_id=last_msg_id
+            )
+    except Exception as e:
+        print(f"Could not delete: {e}")
+    try:
+        await context.bot.delete_message(
+            chat_id=update.message.chat_id, message_id=update.message.message_id
+        )
+    except Exception as e:
+        print(f"Could not delete user message: {e}")
+    last_msg_id = sent.message_id
+    return await show_edited_template(update, context, update.message)
 
     parts = text.split()
 
@@ -507,6 +760,14 @@ async def edit_exercise_details(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text(
             "Invalid format. Please enter 'Sets Weight Reps':"
         )
+        try:
+            if last_msg_id:
+                await context.bot.delete_message(
+                    chat_id=update.message.chat_id, message_id=last_msg_id
+                )
+        except Exception as e:
+            print(f"Could not delete: {e}")
+        last_msg_id = update.message.message_id
         return EDIT_EXERCISE_DETAILS
 
     try:
@@ -519,6 +780,14 @@ async def edit_exercise_details(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text(
             "Invalid format. Please enter positive numbers:"
         )
+        try:
+            if last_msg_id:
+                await context.bot.delete_message(
+                    chat_id=update.message.chat_id, message_id=last_msg_id
+                )
+        except Exception as e:
+            print(f"Could not delete: {e}")
+        last_msg_id = update.message.message_id
         return EDIT_EXERCISE_DETAILS
 
     exercise_idx = context.user_data.get("editing_exercise_idx")
@@ -548,13 +817,30 @@ async def edit_exercise_details(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data.pop("new_exercise_name", None)
         await update.message.reply_text("Exercise added!")
 
+    try:
+        if last_msg_id:
+            await context.bot.delete_message(
+                chat_id=update.message.chat_id, message_id=last_msg_id
+            )
+    except Exception as e:
+        print(f"Could not delete: {e}")
+    last_msg_id = update.message.message_id
     return await show_edited_template(update, context, update.message)
 
 
 async def edit_template_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle template renaming."""
+    global last_msg_id
     context.user_data["editing_template_name"] = update.message.text.strip()
     await update.message.reply_text("Template renamed!")
+    try:
+        if last_msg_id:
+            await context.bot.delete_message(
+                chat_id=update.message.chat_id, message_id=last_msg_id
+            )
+    except Exception as e:
+        print(f"Could not delete: {e}")
+    last_msg_id = update.message.message_id
     return await show_edited_template(update, context, update.message)
 
 
@@ -642,8 +928,23 @@ async def save_edited_template(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def cancel_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancel template editing."""
+    global last_msg_id
     context.user_data.clear()
-    await update.message.reply_text("Template editing canceled.")
+    sent = await update.message.reply_text("Template editing canceled.")
+    try:
+        if last_msg_id:
+            await context.bot.delete_message(
+                chat_id=update.message.chat_id, message_id=last_msg_id
+            )
+    except Exception as e:
+        print(f"Could not delete: {e}")
+    try:
+        await context.bot.delete_message(
+            chat_id=update.message.chat_id, message_id=update.message.message_id
+        )
+    except Exception as e:
+        print(f"Could not delete user message: {e}")
+    last_msg_id = sent.message_id
     return ConversationHandler.END
 
 
@@ -678,8 +979,10 @@ async def end_workout_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data.pop("exercise_history", None)
     context.user_data.pop("waiting_for_add_exercise", None)
     context.user_data.pop("rest_job", None)
-    await query.edit_message_text(
-        "Workout ended. Great effort! 💪\n/start_workout to begin a new workout."
+    await query.edit_message_text("Workout ended. Great effort! 💪\n")
+    await asyncio.sleep(1)
+    await context.bot.delete_message(
+        chat_id=query.message.chat_id, message_id=query.message.message_id
     )
     return ConversationHandler.END
 
@@ -915,7 +1218,10 @@ async def handle_exercise_action(update: Update, context: ContextTypes.DEFAULT_T
             ),
         )
         job = context.job_queue.run_once(
-            rest_timer_callback, rest_seconds, chat_id=query.message.chat_id, user_id=update.effective_user.id
+            rest_timer_callback,
+            rest_seconds,
+            chat_id=query.message.chat_id,
+            user_id=update.effective_user.id,
         )
         context.user_data["rest_job"] = job
         context.user_data["rest_message_id"] = rest_message.message_id
@@ -1576,7 +1882,10 @@ async def log_exercise(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ),
             )
             job = context.job_queue.run_once(
-                rest_timer_callback, rest_seconds, chat_id=update.message.chat_id, user_id=update.effective_user.id
+                rest_timer_callback,
+                rest_seconds,
+                chat_id=update.message.chat_id,
+                user_id=update.effective_user.id,
             )
             context.user_data["rest_job"] = job
             context.user_data["rest_message_id"] = rest_message.message_id
@@ -1676,10 +1985,14 @@ async def rest_timer_callback(context: ContextTypes.DEFAULT_TYPE):
             await context.bot.delete_message(job.chat_id, rest_message_id)
         except Exception:
             pass
-    await context.bot.send_message(
-        chat_id=job.chat_id, 
+    msg = await context.bot.send_message(
+        chat_id=job.chat_id,
         text="⏰ **Rest is over!** Get back to work uwu! 💪",
-        parse_mode="Markdown"
+        parse_mode="Markdown",
+    )
+    await asyncio.sleep(5)
+    await context.bot.delete_message(
+        chat_id=msg.chat_id, message_id=msg.message_id
     )
 
 
