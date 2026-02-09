@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.sql import func
 import os
 from dotenv import load_dotenv
+import json
 
 load_dotenv()
 
@@ -54,9 +55,20 @@ class TemplateExercise(Base):
     default_sets = Column(Integer, default=3)
     default_weight = Column(Float, default=0.0)
     default_reps = Column(Integer, default=0)
+    sets_config = Column(
+        String, nullable=True
+    )  # JSON: [{"weight": 60, "reps": 5}, ...]
     order = Column(Integer, default=0)
 
     template = relationship("Template", back_populates="exercises")
+
+    def get_sets_config(self):
+        if self.sets_config:
+            return json.loads(self.sets_config)
+        return None
+
+    def set_sets_config(self, config):
+        self.sets_config = json.dumps(config)
 
 
 class WorkoutLog(Base):

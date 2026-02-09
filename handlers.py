@@ -299,7 +299,8 @@ async def exercise_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["current_exercise_name"] = text.strip()
     sent = await update.message.reply_text(
-        f"Enter default sets, weight (kg), and reps for {text} separated by space (e.g., '3 50 10'):"
+        f"Enter sets config for {text} (e.g., '3 60x5 65x4 70x3'):\n"
+        f"Format: <num_sets> <weight>x<reps> <weight>x<reps> ..."
     )
     try:
         if last_msg_id:
@@ -325,11 +326,12 @@ async def exercise_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text.lower() == "/done":
         return await save_template(update, context)
 
-    parts = text.split()
+    parts = text.strip().split()
 
-    if len(parts) != 3:
+    if len(parts) < 2:
         sent = await update.message.reply_text(
-            "Invalid format. Please enter 'Sets Weight Reps' (e.g., '3 50 10'):"
+            "Invalid format. Use: '3 60x5 65x4 70x3'\n"
+            "Format: <num_sets> <weight>x<reps> <weight>x<reps> ..."
         )
         try:
             if last_msg_id:
@@ -348,15 +350,64 @@ async def exercise_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return EXERCISE_DETAILS
 
     try:
-        sets = int(parts[0])
-        weight = float(parts[1])
-        reps = int(parts[2])
-
-        if sets <= 0 or reps <= 0:
-            raise ValueError("Values must be positive")
+        num_sets = int(parts[0])
+        if num_sets <= 0:
+            raise ValueError("Sets must be positive")
     except ValueError:
         sent = await update.message.reply_text(
-            "Invalid format. Please enter positive numbers for Sets and Reps (e.g., '3 50 10'):"
+            "First value must be number of sets (e.g., '3')."
+        )
+        try:
+            if last_msg_id:
+                await context.bot.delete_message(
+                    chat_id=update.message.chat_id, message_id=last_msg_id
+                )
+        except Exception as e:
+            print(f"Could not delete: {e}")
+        try:
+            await context.bot.delete_message(
+                chat_id=update.message.chat_id, message_id=update.message.message_id
+            )
+        except Exception as e:
+            print(f"Could not delete user message: {e}")
+        last_msg_id = sent.message_id
+        return EXERCISE_DETAILS
+
+    sets_config = []
+    for i in range(1, len(parts)):
+        try:
+            weight_reps = parts[i].split("x")
+            if len(weight_reps) != 2:
+                raise ValueError
+            weight = float(weight_reps[0])
+            reps = int(weight_reps[1])
+            if reps <= 0 or weight < 0:
+                raise ValueError
+            sets_config.append({"weight": weight, "reps": reps})
+        except (ValueError, IndexError):
+            sent = await update.message.reply_text(
+                f"Invalid format '{parts[i]}'. Use: '60x5' for 60kg x 5 reps"
+            )
+            try:
+                if last_msg_id:
+                    await context.bot.delete_message(
+                        chat_id=update.message.chat_id, message_id=last_msg_id
+                    )
+            except Exception as e:
+                print(f"Could not delete: {e}")
+            try:
+                await context.bot.delete_message(
+                    chat_id=update.message.chat_id, message_id=update.message.message_id
+                )
+            except Exception as e:
+                print(f"Could not delete user message: {e}")
+            last_msg_id = sent.message_id
+            return EXERCISE_DETAILS
+
+    if len(sets_config) != num_sets:
+        sent = await update.message.reply_text(
+            f"Mismatch: You said {num_sets} sets but provided {len(sets_config)} weight x reps values.\n"
+            f"Example for 3 sets: '3 60x5 65x4 70x3'"
         )
         try:
             if last_msg_id:
@@ -378,15 +429,15 @@ async def exercise_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     exercises.append(
         {
             "name": context.user_data["current_exercise_name"],
-            "sets": sets,
-            "weight": weight,
-            "reps": reps,
+            "sets": num_sets,
+            "sets_config": sets_config,
         }
     )
     context.user_data["exercises"] = exercises
 
     sent = await update.message.reply_text(
-        "Exercise added. Enter next exercise name (or /done to finish):"
+        f"✅ {context.user_data['current_exercise_name']} added with {num_sets} sets.\n"
+        f"Enter next exercise name (or /done to finish):"
     )
     try:
         if last_msg_id:
@@ -407,6 +458,8 @@ async def exercise_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def save_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global last_msg_id
+    import json
+
     user_id = update.effective_user.id
     name = context.user_data.get("template_name", "Unnamed Template")
     exercises_data = context.user_data.get("exercises", [])
@@ -430,8 +483,13 @@ async def save_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 template_id=template.id,
                 exercise_name=ex_data["name"],
                 default_sets=ex_data["sets"],
-                default_weight=ex_data["weight"],
-                default_reps=ex_data["reps"],
+                default_weight=ex_data["sets_config"][0]["weight"]
+                if ex_data.get("sets_config")
+                else 0,
+                default_reps=ex_data["sets_config"][0]["reps"]
+                if ex_data.get("sets_config")
+                else 0,
+                sets_config=json.dumps(ex_data.get("sets_config", [])),
                 order=idx,
             )
             session.add(ex)
@@ -539,6 +597,8 @@ async def select_template_to_edit(update: Update, context: ContextTypes.DEFAULT_
 
     context.user_data["editing_template_id"] = template_id
     context.user_data["editing_template_name"] = template.name
+    import json
+
     context.user_data["editing_exercises"] = [
         {
             "id": ex.id,
@@ -546,16 +606,22 @@ async def select_template_to_edit(update: Update, context: ContextTypes.DEFAULT_
             "sets": ex.default_sets,
             "weight": ex.default_weight,
             "reps": ex.default_reps,
+            "sets_config": json.loads(ex.sets_config) if ex.sets_config else None,
         }
         for ex in exercises
     ]
 
     keyboard = []
     for idx, ex in enumerate(context.user_data["editing_exercises"]):
+        sets_text = (
+            ", ".join([f"{s['weight']}x{s['reps']}" for s in ex["sets_config"]])
+            if ex.get("sets_config")
+            else f"{ex['sets']}x{ex['weight']}kgx{ex['reps']}"
+        )
         keyboard.append(
             [
                 InlineKeyboardButton(
-                    f"✏️ {ex['name']} ({ex['sets']}x{ex['weight']}kgx{ex['reps']})",
+                    f"✏️ {ex['name']} ({sets_text})",
                     callback_data=f"etedit_{idx}",
                 ),
                 InlineKeyboardButton("❌", callback_data=f"etrm_{idx}"),
@@ -585,9 +651,7 @@ async def handle_edit_exercise_action(
     last_msg_id = query.message.message_id
 
     if data == "etadd":
-        await query.message.reply_text(
-            "Enter new exercise name (format: 'Name'):\nExample: 'Pushups 3 0 15'"
-        )
+        await query.message.reply_text("Enter new exercise name:")
         return EDIT_EXERCISE_NAME
 
     if data == "etrname":
@@ -601,10 +665,15 @@ async def handle_edit_exercise_action(
         idx = int(data.split("_")[1])
         ex = context.user_data["editing_exercises"][idx]
         context.user_data["editing_exercise_idx"] = idx
+        current_config = (
+            ", ".join([f"{s['weight']}x{s['reps']}" for s in ex["sets_config"]])
+            if ex.get("sets_config")
+            else f"{ex['sets']}x{ex['weight']}kgx{ex['reps']}"
+        )
         await query.message.reply_text(
             f"Editing: {ex['name']}\n"
-            f"Current: {ex['sets']} sets x {ex['weight']}kg x {ex['reps']} reps ({ex['sets'] * ex['weight'] * ex['reps']}kg vol)\n\n"
-            f"Enter new details (sets weight reps) or /skip to keep current:"
+            f"Current: {current_config}\n\n"
+            f"Enter new config (e.g., '3 60x5 65x4 70x3') or /skip to keep current:"
         )
         return EDIT_EXERCISE_DETAILS
 
@@ -622,7 +691,8 @@ async def edit_exercise_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
     text = update.message.text.strip()
     context.user_data["new_exercise_name"] = text
     sent = await update.message.reply_text(
-        f"Enter details for {text} (sets weight reps):\nExample: '3 50 10'"
+        f"Enter sets config for {text} (e.g., '3 60x5 65x4 70x3'):\n"
+        f"Format: <num_sets> <weight>x<reps> <weight>x<reps> ..."
     )
     try:
         if last_msg_id:
@@ -663,11 +733,12 @@ async def edit_exercise_details(update: Update, context: ContextTypes.DEFAULT_TY
         last_msg_id = sent.message_id
         return await show_edited_template(update, context, update.message)
 
-    parts = text.split()
+    parts = text.strip().split()
 
-    if len(parts) != 3:
+    if len(parts) < 2:
         sent = await update.message.reply_text(
-            "Invalid format. Please enter 'Sets Weight Reps':"
+            "Invalid format. Use: '3 60x5 65x4 70x3'\n"
+            "Format: <num_sets> <weight>x<reps> <weight>x<reps> ..."
         )
         try:
             if last_msg_id:
@@ -686,14 +757,63 @@ async def edit_exercise_details(update: Update, context: ContextTypes.DEFAULT_TY
         return EDIT_EXERCISE_DETAILS
 
     try:
-        sets = int(parts[0])
-        weight = float(parts[1])
-        reps = int(parts[2])
-        if sets <= 0 or reps <= 0:
-            raise ValueError("Values must be positive")
+        num_sets = int(parts[0])
+        if num_sets <= 0:
+            raise ValueError("Sets must be positive")
     except ValueError:
         sent = await update.message.reply_text(
-            "Invalid format. Please enter positive numbers:"
+            "First value must be number of sets (e.g., '3')."
+        )
+        try:
+            if last_msg_id:
+                await context.bot.delete_message(
+                    chat_id=update.message.chat_id, message_id=last_msg_id
+                )
+        except Exception as e:
+            print(f"Could not delete: {e}")
+        try:
+            await context.bot.delete_message(
+                chat_id=update.message.chat_id, message_id=update.message.message_id
+            )
+        except Exception as e:
+            print(f"Could not delete user message: {e}")
+        last_msg_id = sent.message_id
+        return EDIT_EXERCISE_DETAILS
+
+    sets_config = []
+    for i in range(1, len(parts)):
+        try:
+            weight_reps = parts[i].split("x")
+            if len(weight_reps) != 2:
+                raise ValueError
+            weight = float(weight_reps[0])
+            reps = int(weight_reps[1])
+            if reps <= 0 or weight < 0:
+                raise ValueError
+            sets_config.append({"weight": weight, "reps": reps})
+        except (ValueError, IndexError):
+            sent = await update.message.reply_text(
+                f"Invalid format '{parts[i]}'. Use: '60x5' for 60kg x 5 reps"
+            )
+            try:
+                if last_msg_id:
+                    await context.bot.delete_message(
+                        chat_id=update.message.chat_id, message_id=last_msg_id
+                    )
+            except Exception as e:
+                print(f"Could not delete: {e}")
+            try:
+                await context.bot.delete_message(
+                    chat_id=update.message.chat_id, message_id=update.message.message_id
+                )
+            except Exception as e:
+                print(f"Could not delete user message: {e}")
+            last_msg_id = sent.message_id
+            return EDIT_EXERCISE_DETAILS
+
+    if len(sets_config) != num_sets:
+        sent = await update.message.reply_text(
+            f"Mismatch: You said {num_sets} sets but provided {len(sets_config)} weight x reps values."
         )
         try:
             if last_msg_id:
@@ -719,9 +839,10 @@ async def edit_exercise_details(update: Update, context: ContextTypes.DEFAULT_TY
                     "new_exercise_name",
                     context.user_data["editing_exercises"][exercise_idx]["name"],
                 ),
-                "sets": sets,
-                "weight": weight,
-                "reps": reps,
+                "sets": num_sets,
+                "weight": sets_config[0]["weight"],
+                "reps": sets_config[0]["reps"],
+                "sets_config": sets_config,
             }
         )
         context.user_data.pop("editing_exercise_idx", None)
@@ -730,9 +851,10 @@ async def edit_exercise_details(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data["editing_exercises"].append(
             {
                 "name": context.user_data["new_exercise_name"],
-                "sets": sets,
-                "weight": weight,
-                "reps": reps,
+                "sets": num_sets,
+                "weight": sets_config[0]["weight"],
+                "reps": sets_config[0]["reps"],
+                "sets_config": sets_config,
             }
         )
         context.user_data.pop("new_exercise_name", None)
@@ -848,11 +970,15 @@ async def show_edited_template(update, context, message):
     """Show the current state of the edited template."""
     keyboard = []
     for idx, ex in enumerate(context.user_data["editing_exercises"]):
-        volume = ex["sets"] * ex["weight"] * ex["reps"]
+        sets_text = (
+            ", ".join([f"{s['weight']}x{s['reps']}" for s in ex["sets_config"]])
+            if ex.get("sets_config")
+            else f"{ex['sets']}x{ex['weight']}kgx{ex['reps']}"
+        )
         keyboard.append(
             [
                 InlineKeyboardButton(
-                    f"✏️ {ex['name']} ({ex['sets']}x{ex['weight']}kgx{ex['reps']}) - {volume}kg vol",
+                    f"✏️ {ex['name']} ({sets_text})",
                     callback_data=f"etedit_{idx}",
                 ),
                 InlineKeyboardButton("❌", callback_data=f"etrm_{idx}"),
@@ -908,8 +1034,13 @@ async def save_edited_template(update: Update, context: ContextTypes.DEFAULT_TYP
                     template_id=template.id,
                     exercise_name=ex_data["name"],
                     default_sets=ex_data["sets"],
-                    default_weight=ex_data["weight"],
-                    default_reps=ex_data["reps"],
+                    default_weight=ex_data["sets_config"][0]["weight"]
+                    if ex_data.get("sets_config")
+                    else 0,
+                    default_reps=ex_data["sets_config"][0]["reps"]
+                    if ex_data.get("sets_config")
+                    else 0,
+                    sets_config=json.dumps(ex_data.get("sets_config", [])),
                     order=idx,
                 )
                 session.add(ex)
@@ -1046,6 +1177,9 @@ async def select_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "default_sets": ex.default_sets,
                 "default_weight": ex.default_weight,
                 "default_reps": ex.default_reps,
+                "sets_config": ex.get_sets_config()
+                if hasattr(ex, "get_sets_config")
+                else None,
             }
             for ex in exercises
         ],
@@ -1056,11 +1190,19 @@ async def select_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Show all exercises for selection
     keyboard = []
     for idx, ex in enumerate(context.user_data["current_workout"]["exercises"]):
-        volume = ex["default_sets"] * ex["default_weight"] * ex["default_reps"]
+        sets_config = ex.get("sets_config")
+        if sets_config:
+            sets_text = ", ".join([f"{s['weight']}x{s['reps']}" for s in sets_config])
+            volume = sum([s["weight"] * s["reps"] for s in sets_config])
+        else:
+            sets_text = (
+                f"{ex['default_sets']}x{ex['default_weight']}kgx{ex['default_reps']}"
+            )
+            volume = ex["default_sets"] * ex["default_weight"] * ex["default_reps"]
         keyboard.append(
             [
                 InlineKeyboardButton(
-                    f"{ex['name']} ({ex['default_sets']}x{ex['default_weight']}kgx{ex['default_reps']} reps) - {volume}kg vol",
+                    f"{ex['name']} ({sets_text}) - {volume}kg vol",
                     callback_data=f"ex_{idx}",
                 ),
             ]
@@ -1100,10 +1242,16 @@ def build_set_keyboard(exercise_idx, ex_data, logged_sets, context, is_completed
 
     keyboard = []
     total_sets = ex_data["default_sets"]
-    default_weight = ex_data["default_weight"]
-    default_reps = ex_data["default_reps"]
+    sets_config = ex_data.get("sets_config")
 
     for set_num in range(1, total_sets + 1):
+        if sets_config and set_num <= len(sets_config):
+            default_weight = sets_config[set_num - 1]["weight"]
+            default_reps = sets_config[set_num - 1]["reps"]
+        else:
+            default_weight = ex_data["default_weight"]
+            default_reps = ex_data["default_reps"]
+
         if set_num <= len(logged_sets):
             logged = logged_sets[set_num - 1]
             if logged.get("weight") is not None and logged.get("reps") is not None:
@@ -1791,40 +1939,83 @@ async def log_exercise(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if context.user_data.get("waiting_for_add_exercise"):
+        text = update.message.text.strip()
         parts = text.split()
-        if len(parts) != 4:
+
+        if len(parts) < 3:
             await update.message.reply_text(
-                "Invalid format. Enter: 'Name sets weight reps'\nExample: 'Pushups 3 0 15'"
+                "Invalid format. Use: 'Name 3 60x5 65x4'\nExample: 'Bench Press 3 60x5 65x4'"
             )
             return WORKOUT_EXERCISE_INPUT
+
         try:
-            name = parts[0]
-            sets = int(parts[1])
-            weight = float(parts[2])
-            reps = int(parts[3])
+            num_sets = int(parts[0])
+            if num_sets <= 0:
+                raise ValueError("Sets must be positive")
         except ValueError:
             await update.message.reply_text(
-                "Invalid format. Enter: 'Name sets weight reps'\nExample: 'Pushups 3 0 15'"
+                "First value must be number of sets (e.g., '3')."
             )
             return WORKOUT_EXERCISE_INPUT
+
+        weight_reps_parts = parts[-num_sets:] if len(parts) >= num_sets + 1 else []
+
+        if len(weight_reps_parts) < num_sets:
+            await update.message.reply_text(
+                f"Please provide {num_sets} weight x reps values (e.g., '60x5')."
+            )
+            return WORKOUT_EXERCISE_INPUT
+
+        name_parts = parts[1:-num_sets] if len(parts) > num_sets + 1 else []
+        name = " ".join(name_parts) if name_parts else parts[1]
+        name = name.strip()
+
+        sets_config = []
+        for pr in weight_reps_parts:
+            try:
+                wr = pr.split("x")
+                if len(wr) != 2:
+                    raise ValueError
+                weight = float(wr[0])
+                reps = int(wr[1])
+                if reps <= 0 or weight < 0:
+                    raise ValueError
+                sets_config.append({"weight": weight, "reps": reps})
+            except (ValueError, IndexError):
+                await update.message.reply_text(
+                    f"Invalid format '{pr}'. Use: '60x5' for 60kg x 5 reps"
+                )
+                return WORKOUT_EXERCISE_INPUT
+
         workout_data = context.user_data.get("current_workout")
         if workout_data and "exercises" in workout_data:
             workout_data["exercises"].append(
                 {
                     "name": name,
-                    "default_sets": sets,
-                    "default_weight": weight,
-                    "default_reps": reps,
+                    "default_sets": num_sets,
+                    "default_weight": sets_config[0]["weight"],
+                    "default_reps": sets_config[0]["reps"],
+                    "sets_config": sets_config,
                 }
             )
             context.user_data.pop("waiting_for_add_exercise", None)
             exercises = workout_data["exercises"]
             keyboard = []
             for idx, ex in enumerate(exercises):
+                sets_text = (
+                    ", ".join(
+                        [
+                            f"{s['weight']}x{s['reps']}"
+                            for s in ex.get("sets_config", [])
+                        ]
+                    )
+                    if ex.get("sets_config")
+                    else f"{ex['default_sets']}x{ex['default_weight']}kgx{ex['default_reps']}"
+                )
                 keyboard.append(
                     [
                         InlineKeyboardButton(
-                            f"{idx + 1}. {ex['name']} ({ex['default_sets']} sets x {ex['default_weight']}kg x {ex['default_reps']} reps)",
+                            f"{idx + 1}. {ex['name']} ({sets_text})",
                             callback_data=f"ex_{idx}",
                         )
                     ]
@@ -1991,9 +2182,7 @@ async def rest_timer_callback(context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
     )
     await asyncio.sleep(5)
-    await context.bot.delete_message(
-        chat_id=msg.chat_id, message_id=msg.message_id
-    )
+    await context.bot.delete_message(chat_id=msg.chat_id, message_id=msg.message_id)
 
 
 async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
