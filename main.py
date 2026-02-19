@@ -52,6 +52,9 @@ from handlers import (
     settings_rest_confirm,
     SETTINGS_REST,
     SETTINGS_REST_CONFIRM,
+    add_template_ai_start,
+    process_ai_template,
+    ADD_TEMPLATE_AI_INPUT,
 )
 from database import init_db
 from dotenv import load_dotenv
@@ -98,6 +101,16 @@ def main():
             CommandHandler("cancel", cancel),
             CommandHandler("done", done_handler),
         ],
+    )
+
+    add_template_ai_conv = ConversationHandler(
+        entry_points=[CommandHandler("add_template_ai", add_template_ai_start)],
+        states={
+            ADD_TEMPLATE_AI_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, process_ai_template)
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
     )
 
     workout_conv = ConversationHandler(
@@ -148,6 +161,7 @@ def main():
     application.add_handler(CommandHandler("settings", settings))
     application.add_handler(create_template_conv)
     application.add_handler(edit_template_conv)
+    application.add_handler(add_template_ai_conv)
     application.add_handler(workout_conv)
 
     settings_conv = ConversationHandler(
@@ -174,13 +188,15 @@ def main():
         )
     )
 
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=8080,
-        url_path=f"{TOKEN}",
-        webhook_url=f"{WEBHOOK_URL}/{TOKEN}",
-        ip_address="66.241.124.249",
-    )
+    # application.run_webhook(
+    #     listen="0.0.0.0",
+    #     port=8080,
+    #     url_path=f"{TOKEN}",
+    #     webhook_url=f"{WEBHOOK_URL}/{TOKEN}",
+    #     ip_address="66.241.124.249",
+    # )
+
+    application.run_polling()
 
 
 async def post_init(application):

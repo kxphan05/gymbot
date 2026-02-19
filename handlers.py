@@ -14,6 +14,19 @@ from telegram.ext import (
 from sqlalchemy import select, desc, update
 from sqlalchemy.orm import selectinload
 from database import AsyncSessionLocal, User, Template, TemplateExercise, WorkoutLog
+import os
+from openai import AsyncOpenAI
+
+client = None
+def get_client():
+    global client
+    if client is None:
+        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("API_TOKEN")
+        if not api_key:
+            # Fallback for testing or incomplete setup
+            return AsyncOpenAI(api_key="sk-dummy")
+        client = AsyncOpenAI(api_key=api_key, base_url="https://api.publicai.co/v1")
+    return client
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -35,7 +48,8 @@ last_chat_id = None
     EDIT_TEMPLATE_NAME,
     EDIT_EXERCISE_NAME,
     EDIT_EXERCISE_DETAILS,
-) = range(13)
+    ADD_TEMPLATE_AI_INPUT,
+) = range(14)
 
 WEIGHT_KEYBOARD = InlineKeyboardMarkup(
     [
@@ -122,7 +136,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Welcome to GymBot! 💪\n"
         "Commands:\n"
-        "/create_template - Create a new workout routine\n"
+        "/create_template - Create a new workout routine (step-by-step)\n"
+        "/add_template_ai - Create a workout routine using AI (natural language)\n"
         "/edit_template - Edit an existing template\n"
         "/start_workout - Start logging a workout\n"
         "/history - View workout calendar\n"
@@ -250,6 +265,144 @@ async def settings_rest_confirm(update: Update, context: ContextTypes.DEFAULT_TY
     return ConversationHandler.END
 
 
+async def add_template_ai_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start the AI template creation flow."""
+    global last_msg_id
+    await update.message.reply_text(
+        "Please describe your workout template in natural language.\n"
+        "Example: 'Push Day: 3 sets of Bench Press 80kg for 5 reps, 3 sets of Overhead Press 40kg for 8 reps'"
+    )
+    if last_msg_id:
+        try:
+            await context.bot.delete_message(
+                chat_id=update.message.chat_id, message_id=last_msg_id
+            )
+        except Exception as e:
+            print(f"Could not delete: {e}")
+    last_msg_id = update.message.message_id
+    return ADD_TEMPLATE_AI_INPUT
+
+
+async def process_ai_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Process the natural language workout description using OpenAI."""
+    global last_msg_id
+    user_input = update.message.text
+
+    # Show typing action to user
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+    # Send transient processing message
+    processing_msg = await update.message.reply_text("Got it! Analyzing your workout routine... ⏳")
+    if last_msg_id:
+        try:
+            await context.bot.delete_message(
+                chat_id=update.message.chat_id, message_id=last_msg_id
+            )
+        except Exception:
+            pass
+    last_msg_id = processing_msg.message_id
+
+    ai_client = get_client()
+    system_prompt = (
+        "You are a workout assistant. Your task is to parse a workout description into a detailed JSON format.\n"
+        "The output MUST be a JSON object with two keys:\n"
+        "1. \"template_name\": (string) A concise name for the workout.\n"
+        "2. \"exercises\": (list of objects) Each object must have:\n"
+        "   - \"name\": (string) Exercise name.\n"
+        "   - \"sets\": (int) Total number of sets.\n"
+        "   - \"sets_config\": (list of objects) Each object has \"weight\" (float) and \"reps\" (int).\n\n"
+        "Provide ONLY the JSON response, no other text.\n\n"
+        "EXAMPLES:\n"
+        "User: \"Leg Day: 3 sets of Squats at 100kg for 5 reps\"\n"
+        "Assistant: {\"template_name\": \"Leg Day\", \"exercises\": [{\"name\": \"Squats\", \"sets\": 3, \"sets_config\": [{\"weight\": 100.0, \"reps\": 5}, {\"weight\": 100.0, \"reps\": 5}, {\"weight\": 100.0, \"reps\": 5}]}]}\n\n"
+        "User: \"Upper Body: Bench Press 2 sets 60kg x 10, then 1 set 65kg x 8\"\n"
+        "Assistant: {\"template_name\": \"Upper Body\", \"exercises\": [{\"name\": \"Bench Press\", \"sets\": 3, \"sets_config\": [{\"weight\": 60.0, \"reps\": 10}, {\"weight\": 60.0, \"reps\": 10}, {\"weight\": 65.0, \"reps\": 8}]}]}"
+    )
+
+    try:
+        response = await ai_client.chat.completions.create(
+            model="allenai/Molmo2-8B",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input}
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=2000
+        )
+
+        content = response.choices[0].message.content
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError as je:
+            logger.error(f"JSON parsing error: {je}")
+            logger.error(f"Raw content snippet: {content[:1000]}")
+            await update.message.reply_text("The AI returned an invalid response. Please try again.")
+            return ADD_TEMPLATE_AI_INPUT
+
+        template_name = data.get("template_name", "AI Template")
+        raw_exercises = data.get("exercises", [])
+        
+        exercises = []
+        for ex in raw_exercises:
+            name = ex.get("name", "Unknown Exercise")
+            num_sets = ex.get("sets", 0)
+            sets_config = ex.get("sets_config", [])
+            
+            # Simple validation
+            if num_sets > 0 and len(sets_config) > 0:
+                # Ensure weight and reps are valid
+                valid_config = []
+                for s in sets_config:
+                    weight = float(s.get("weight", 0.0))
+                    reps = int(s.get("reps", 0))
+                    if reps > 0:
+                        valid_config.append({"weight": weight, "reps": reps})
+                
+                if valid_config:
+                    exercises.append({
+                        "name": name,
+                        "sets": len(valid_config),
+                        "sets_config": valid_config
+                    })
+            else:
+                logger.warning(f"AI parsing skip exercise {name}: Invalid structure")
+
+        if not exercises:
+            await update.message.reply_text("Could not parse any exercises correctly. Please try again with a clearer description.")
+            return ADD_TEMPLATE_AI_INPUT
+
+        context.user_data["template_name"] = template_name
+        context.user_data["exercises"] = exercises
+
+        # Confirmation message
+        ex_list = "\n".join([f"- {ex['name']}: {ex['sets']} sets" for ex in exercises])
+        sent = await update.message.reply_text(
+            f"I've parsed your workout:\n\n"
+            f"**Template Name:** {template_name}\n"
+            f"**Exercises:**\n{ex_list}\n\n"
+            f"Saving it now..."
+        )
+        
+        # Update last_msg_id so save_template deletes this confirmation message
+        if last_msg_id:
+            try:
+                await context.bot.delete_message(
+                    chat_id=update.message.chat_id, message_id=last_msg_id
+                )
+            except Exception:
+                pass
+        last_msg_id = sent.message_id
+
+        return await save_template(update, context)
+
+    except Exception as e:
+        logger.error(f"AI parsing error: {e}")
+        await update.message.reply_text(
+            "Sorry, I had trouble understanding that. Please make sure the description is clear and try again, or use /cancel to stop."
+        )
+        return ADD_TEMPLATE_AI_INPUT
+
+
 async def create_template_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global last_msg_id
     await update.message.reply_text(
@@ -319,59 +472,21 @@ async def exercise_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return EXERCISE_DETAILS
 
 
-async def exercise_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global last_msg_id
-    text = update.message.text
-
-    if text.lower() == "/done":
-        return await save_template(update, context)
-
+def parse_exercise_details(text: str):
+    """Parse exercise details string into (num_sets, sets_config, error_message)."""
     parts = text.strip().split()
-
     if len(parts) < 2:
-        sent = await update.message.reply_text(
+        return None, None, (
             "Invalid format. Use: '3 60x5 65x4 70x3'\n"
             "Format: <num_sets> <weight>x<reps> <weight>x<reps> ..."
         )
-        try:
-            if last_msg_id:
-                await context.bot.delete_message(
-                    chat_id=update.message.chat_id, message_id=last_msg_id
-                )
-        except Exception as e:
-            print(f"Could not delete: {e}")
-        try:
-            await context.bot.delete_message(
-                chat_id=update.message.chat_id, message_id=update.message.message_id
-            )
-        except Exception as e:
-            print(f"Could not delete user message: {e}")
-        last_msg_id = sent.message_id
-        return EXERCISE_DETAILS
 
     try:
         num_sets = int(parts[0])
         if num_sets <= 0:
-            raise ValueError("Sets must be positive")
+            return None, None, "First value must be a positive number of sets (e.g., '3')."
     except ValueError:
-        sent = await update.message.reply_text(
-            "First value must be number of sets (e.g., '3')."
-        )
-        try:
-            if last_msg_id:
-                await context.bot.delete_message(
-                    chat_id=update.message.chat_id, message_id=last_msg_id
-                )
-        except Exception as e:
-            print(f"Could not delete: {e}")
-        try:
-            await context.bot.delete_message(
-                chat_id=update.message.chat_id, message_id=update.message.message_id
-            )
-        except Exception as e:
-            print(f"Could not delete user message: {e}")
-        last_msg_id = sent.message_id
-        return EXERCISE_DETAILS
+        return None, None, "First value must be number of sets (e.g., '3')."
 
     sets_config = []
     for i in range(1, len(parts)):
@@ -385,43 +500,40 @@ async def exercise_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 raise ValueError
             sets_config.append({"weight": weight, "reps": reps})
         except (ValueError, IndexError):
-            sent = await update.message.reply_text(
-                f"Invalid format '{parts[i]}'. Use: '60x5' for 60kg x 5 reps"
-            )
-            try:
-                if last_msg_id:
-                    await context.bot.delete_message(
-                        chat_id=update.message.chat_id, message_id=last_msg_id
-                    )
-            except Exception as e:
-                print(f"Could not delete: {e}")
-            try:
-                await context.bot.delete_message(
-                    chat_id=update.message.chat_id, message_id=update.message.message_id
-                )
-            except Exception as e:
-                print(f"Could not delete user message: {e}")
-            last_msg_id = sent.message_id
-            return EXERCISE_DETAILS
+            return None, None, f"Invalid format '{parts[i]}'. Use: '60x5' for 60kg x 5 reps"
 
     if len(sets_config) != num_sets:
-        sent = await update.message.reply_text(
-            f"Mismatch: You said {num_sets} sets but provided {len(sets_config)} weight x reps values.\n"
+        return None, None, (
+            f"Mismatch: You said {num_sets} sets but provided {len(sets_config)} values.\n"
             f"Example for 3 sets: '3 60x5 65x4 70x3'"
         )
+
+    return num_sets, sets_config, None
+
+
+async def exercise_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global last_msg_id
+    text = update.message.text
+
+    if text.lower() == "/done":
+        return await save_template(update, context)
+
+    num_sets, sets_config, error = parse_exercise_details(text)
+    if error:
+        sent = await update.message.reply_text(error)
         try:
             if last_msg_id:
                 await context.bot.delete_message(
                     chat_id=update.message.chat_id, message_id=last_msg_id
                 )
-        except Exception as e:
-            print(f"Could not delete: {e}")
+        except Exception:
+            pass
         try:
             await context.bot.delete_message(
                 chat_id=update.message.chat_id, message_id=update.message.message_id
             )
-        except Exception as e:
-            print(f"Could not delete user message: {e}")
+        except Exception:
+            pass
         last_msg_id = sent.message_id
         return EXERCISE_DETAILS
 
@@ -444,14 +556,14 @@ async def exercise_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.delete_message(
                 chat_id=update.message.chat_id, message_id=last_msg_id
             )
-    except Exception as e:
-        print(f"Could not delete: {e}")
+    except Exception:
+        pass
     try:
         await context.bot.delete_message(
             chat_id=update.message.chat_id, message_id=update.message.message_id
         )
-    except Exception as e:
-        print(f"Could not delete user message: {e}")
+    except Exception:
+        pass
     last_msg_id = sent.message_id
     return EXERCISE_NAME
 
