@@ -47,6 +47,9 @@ from handlers import (
     EDIT_TEMPLATE_NAME,
     EDIT_EXERCISE_NAME,
     EDIT_EXERCISE_DETAILS,
+    DELETE_TEMPLATE_CONFIRM,
+    confirm_delete_template,
+    handle_delete_template_confirm,
     settings,
     settings_rest,
     settings_rest_confirm,
@@ -54,6 +57,7 @@ from handlers import (
     SETTINGS_REST_CONFIRM,
     add_template_ai_start,
     process_ai_template,
+    process_ai_template_file,
     ADD_TEMPLATE_AI_INPUT,
 )
 from database import init_db
@@ -63,7 +67,7 @@ load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-persistence = PicklePersistence(filepath='storage.pickle')
+persistence = PicklePersistence(filepath="storage.pickle")
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -96,11 +100,25 @@ def main():
             EXERCISE_DETAILS: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, exercise_details)
             ],
+            EDIT_TEMPLATE_EXERCISE: [
+                CallbackQueryHandler(handle_edit_exercise_action),
+                CallbackQueryHandler(handle_exercise_action),
+            ],
+            EDIT_TEMPLATE_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_template_name),
+            ],
+            EDIT_EXERCISE_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_exercise_name),
+            ],
+            EDIT_EXERCISE_DETAILS: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_exercise_details),
+            ],
+            WORKOUT_EXERCISE_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, log_exercise),
+                CallbackQueryHandler(handle_exercise_action),
+            ],
         },
-        fallbacks=[
-            CommandHandler("cancel", cancel),
-            CommandHandler("done", done_handler),
-        ],
+        fallbacks=[CommandHandler("cancel", cancel)],
     )
 
     add_template_ai_conv = ConversationHandler(
@@ -142,6 +160,7 @@ def main():
             ],
             EDIT_TEMPLATE_EXERCISE: [
                 CallbackQueryHandler(handle_edit_exercise_action),
+                CallbackQueryHandler(handle_exercise_action),
             ],
             EDIT_TEMPLATE_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, edit_template_name),
@@ -151,6 +170,13 @@ def main():
             ],
             EDIT_EXERCISE_DETAILS: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, edit_exercise_details),
+            ],
+            DELETE_TEMPLATE_CONFIRM: [
+                CallbackQueryHandler(handle_delete_template_confirm, pattern="^etdel_"),
+            ],
+            WORKOUT_EXERCISE_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, log_exercise),
+                CallbackQueryHandler(handle_exercise_action),
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel_edit)],
@@ -184,19 +210,17 @@ def main():
     application.add_handler(
         CallbackQueryHandler(
             handle_exercise_action,
-            pattern="^(skip|rest|back_to_exercise|confirm|cancel_rest|edit_set_|log_set_|custom_rest|w_|r_|use_defaults|use_existing_values|edit_weight|edit_reps|complete_)",
+            pattern="^(skip|rest|back_to_exercise|confirm|cancel_rest|edit_set_|log_set_|custom_rest|w_|r_|use_defaults|use_existing_values|edit_weight|edit_reps|complete_|etuse_current)",
         )
     )
 
-    # application.run_webhook(
-    #     listen="0.0.0.0",
-    #     port=8080,
-    #     url_path=f"{TOKEN}",
-    #     webhook_url=f"{WEBHOOK_URL}/{TOKEN}",
-    #     ip_address="66.241.124.249",
-    # )
-
-    application.run_polling()
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=8080,
+        url_path=f"{TOKEN}",
+        webhook_url=f"{WEBHOOK_URL}/{TOKEN}",
+        ip_address="66.241.124.249",
+    )
 
 
 async def post_init(application):

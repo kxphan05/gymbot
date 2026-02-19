@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
-from handlers import add_template_ai_start, process_ai_template, ADD_TEMPLATE_AI_INPUT
+from handlers import add_template_ai_start, process_ai_template, ADD_TEMPLATE_AI_INPUT, EDIT_TEMPLATE_EXERCISE
 import json
 
 @pytest.mark.asyncio
@@ -40,7 +40,7 @@ async def test_process_ai_template_success(mock_update, mock_context):
             
             state = await process_ai_template(mock_update, mock_context)
             
-            assert state == -1
+            assert state == EDIT_TEMPLATE_EXERCISE
             assert mock_context.user_data["template_name"] == "Push Day"
             assert len(mock_context.user_data["exercises"]) == 1
             assert mock_update.message.reply_text.called
