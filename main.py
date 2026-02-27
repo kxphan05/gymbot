@@ -125,7 +125,26 @@ def main():
         entry_points=[CommandHandler("add_template_ai", add_template_ai_start)],
         states={
             ADD_TEMPLATE_AI_INPUT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, process_ai_template)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, process_ai_template),
+                MessageHandler(
+                    filters.PHOTO | filters.Document.ALL, process_ai_template_file
+                ),
+            ],
+            EDIT_TEMPLATE_EXERCISE: [
+                CallbackQueryHandler(handle_edit_exercise_action),
+                CallbackQueryHandler(handle_exercise_action),
+            ],
+            EDIT_TEMPLATE_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_template_name),
+            ],
+            EDIT_EXERCISE_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_exercise_name),
+            ],
+            EDIT_EXERCISE_DETAILS: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_exercise_details),
+            ],
+            DELETE_TEMPLATE_CONFIRM: [
+                CallbackQueryHandler(handle_delete_template_confirm, pattern="^etdel_"),
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
