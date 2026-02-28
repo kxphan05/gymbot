@@ -7,6 +7,8 @@ from handlers import (
     exercise_name,
     show_edited_template,
     rest_timer_callback,
+    TEMPLATE_NAME,
+    EDIT_TEMPLATE_EXERCISE,
 )
 from telegram.ext import ConversationHandler
 
@@ -14,7 +16,7 @@ from telegram.ext import ConversationHandler
 @pytest.mark.asyncio
 async def test_start_command(mock_update, mock_context):
     # Mock database session
-    with patch("handlers.AsyncSessionLocal") as mock_session_cls:
+    with patch("handlers.start.AsyncSessionLocal") as mock_session_cls:
         # Create the precise result object we expect
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = None
@@ -45,16 +47,17 @@ async def test_start_command(mock_update, mock_context):
 async def test_create_template_flow(mock_update, mock_context):
     # Test create_template_start
     state = await create_template_start(mock_update, mock_context)
-    assert state == 0  # TEMPLATE_NAME
+    assert state == TEMPLATE_NAME
     assert "What specific name" in mock_update.message.reply_text.call_args[0][0]
 
-    # Test template_name
+    # Test template_name - now goes to show_edited_template (EDIT_TEMPLATE_EXERCISE)
     mock_update.message.text = "Leg Day"
+    mock_context.bot = AsyncMock()
     state = await template_name(mock_update, mock_context)
-    assert state == 1  # EXERCISE_NAME
+    assert state == EDIT_TEMPLATE_EXERCISE
     assert mock_context.user_data["template_name"] == "Leg Day"
 
-    # Test exercise_name
+    # Test exercise_name (in create flow, it goes to EXERCISE_DETAILS)
     mock_update.message.text = "Squat"
     state = await exercise_name(mock_update, mock_context)
     assert state == 2  # EXERCISE_DETAILS
@@ -74,7 +77,8 @@ async def test_volume_calculation_template(mock_update, mock_context):
 
     await show_edited_template(mock_update, mock_context, mock_message)
 
-    call_args = mock_message.reply_text.call_args
+    # show_edited_template calls edit_text on the message object (not reply_text)
+    call_args = mock_message.edit_text.call_args
     reply_markup = call_args[1]["reply_markup"]
     button_texts = [
         button.text for row in reply_markup.inline_keyboard for button in row
@@ -97,7 +101,8 @@ async def test_volume_calculation_zero_weight(mock_update, mock_context):
 
     await show_edited_template(mock_update, mock_context, mock_message)
 
-    call_args = mock_message.reply_text.call_args
+    # show_edited_template calls edit_text on the message object (not reply_text)
+    call_args = mock_message.edit_text.call_args
     reply_markup = call_args[1]["reply_markup"]
     button_texts = [
         button.text for row in reply_markup.inline_keyboard for button in row
@@ -116,11 +121,13 @@ async def test_rest_timer_callback_deletes_message(mock_context):
     mock_context.job.chat_id = 12345
     mock_context.bot = AsyncMock()
 
-    await rest_timer_callback(mock_context)
+    with patch("handlers.workout.asyncio.sleep", new_callable=AsyncMock):
+        await rest_timer_callback(mock_context)
 
-    mock_context.bot.delete_message.assert_called_once_with(12345, 123)
+    # First call: delete rest message; second call: delete "rest is over" message
+    assert mock_context.bot.delete_message.call_count == 2
+    mock_context.bot.delete_message.assert_any_call(12345, 123)
     assert "rest_message_id" not in mock_context.user_data
-    assert "rest_job" not in mock_context.user_data
 
 
 @pytest.mark.asyncio
@@ -131,6 +138,8 @@ async def test_rest_timer_callback_handles_missing_message(mock_context):
     mock_context.job.chat_id = 12345
     mock_context.bot = AsyncMock()
 
-    await rest_timer_callback(mock_context)
+    with patch("handlers.workout.asyncio.sleep", new_callable=AsyncMock):
+        await rest_timer_callback(mock_context)
 
-    mock_context.bot.delete_message.assert_not_called()
+    # Only the "rest is over" message delete, not the rest_message_id delete
+    assert mock_context.bot.delete_message.call_count == 1

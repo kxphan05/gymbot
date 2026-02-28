@@ -29,32 +29,25 @@ async def test_process_ai_template_success(mock_update, mock_context):
         })))
     ]
     
-    with patch("handlers.get_client") as mock_get_client:
+    with patch("handlers.ai_template.get_client") as mock_get_client:
         mock_ai_client = AsyncMock()
         mock_get_client.return_value = mock_ai_client
         mock_ai_client.chat.completions.create.return_value = mock_response
         
-        # Mock save_template to avoid DB interaction in this test
-        with patch("handlers.save_template", new_callable=AsyncMock) as mock_save:
-            mock_save.return_value = -1 # Simulation of ConversationHandler.END (usually -1)
-            
-            state = await process_ai_template(mock_update, mock_context)
-            
-            assert state == EDIT_TEMPLATE_EXERCISE
-            assert mock_context.user_data["template_name"] == "Push Day"
-            assert len(mock_context.user_data["exercises"]) == 1
-            assert mock_update.message.reply_text.called
-            # The first reply_text is the confirmation, but wait, 
-            # handlers.py calls update.message.reply_text twice if successful (once in confirm, once in save_template if mocked)
-            # Actually, process_ai_template calls it once, then returns save_template.
-            assert any("parsed your workout" in str(call) for call in mock_update.message.reply_text.call_args_list)
+        state = await process_ai_template(mock_update, mock_context)
+        
+        assert state == EDIT_TEMPLATE_EXERCISE
+        assert mock_context.user_data["template_name"] == "Push Day"
+        assert len(mock_context.user_data["exercises"]) == 1
+        assert mock_update.message.reply_text.called
+        assert any("parsed your workout" in str(call) for call in mock_update.message.reply_text.call_args_list)
 
 @pytest.mark.asyncio
 async def test_process_ai_template_error(mock_update, mock_context):
     mock_update.message.text = "invalid input"
     mock_context.bot = AsyncMock()
     
-    with patch("handlers.get_client") as mock_get_client:
+    with patch("handlers.ai_template.get_client") as mock_get_client:
         mock_ai_client = AsyncMock()
         mock_get_client.return_value = mock_ai_client
         mock_ai_client.chat.completions.create.side_effect = Exception("API Error")
@@ -88,7 +81,7 @@ async def test_process_ai_template_photo(mock_update, mock_context):
         })))
     ]
     
-    with patch("handlers.get_client") as mock_get_client:
+    with patch("handlers.ai_template.get_client") as mock_get_client:
         mock_ai_client = AsyncMock()
         mock_get_client.return_value = mock_ai_client
         mock_ai_client.chat.completions.create.return_value = mock_response
@@ -128,4 +121,3 @@ async def test_process_ai_template_csv(mock_update, mock_context):
     assert mock_context.user_data["template_name"] == "CSV Import"
     assert len(mock_context.user_data["exercises"]) == 1
     assert mock_context.user_data["exercises"][0]["name"] == "Bench Press"
-
