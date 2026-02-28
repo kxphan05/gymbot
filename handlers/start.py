@@ -23,14 +23,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["default_rest_seconds"] = user.default_rest_seconds
 
     await update.message.reply_text(
-        "Welcome to GymBot! 💪\n"
-        "Commands:\n"
-        "/create_template - Create a new workout routine (step-by-step)\n"
-        "/add_template_ai - Create a workout routine using AI (natural language)\n"
-        "/edit_template - Edit an existing template\n"
-        "/start_workout - Start logging a workout\n"
-        "/history - View workout calendar\n"
-        "/settings - Change your settings"
+    "🔥 **WELCOME TO GYMBOT v2.0!** 🔥\n"
+        "Your digital spotter for massive gains. 🦾✨\n\n"
+        
+        "🛠️ **BUILD YOUR ROUTINE**\n"
+        "────────────────────\n"
+        "📝 /create_template — Manual step-by-step setup 🏗️\n"
+        "🤖 /add_template_ai — Just type it, I'll build it! 🧠⚡\n"
+        "🎯 /recommend_template — Get a PRO routine based on YOUR stats 📈💎\n"
+        "✏️ /edit_template — Tweak your existing gains-blueprints 🛠️\n\n"
+        
+        "🏋️ **TIME TO LIFT**\n"
+        "────────────────────\n"
+        "🚀 /start_workout — Let's hit the iron! 🔔🔥\n"
+        "📅 /history — See your consistency calendar 🗓️💪\n\n"
+        
+        "⚙️ **SYSTEM**\n"
+        "────────────────────\n"
+        "🔧 /settings — Adjust units, bio, and LLM preferences ⚙️\n\n"
+        
+        "**What are we smashing today?** 👇"
     )
     try:
         if common.last_msg_id:

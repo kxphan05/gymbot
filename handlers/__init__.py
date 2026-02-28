@@ -19,6 +19,12 @@ from handlers.common import (
     DELETE_TEMPLATE_CONFIRM,
     SETTINGS_REST,
     SETTINGS_REST_CONFIRM,
+    AI_COACH_BIO,
+    AI_COACH_SBD,
+    AI_COACH_SPLIT,
+    AI_COACH_GOALS,
+    AI_COACH_REVIEW,
+    AI_COACH_REGEN_COMMENT,
     WEIGHT_KEYBOARD,
     REPS_KEYBOARD,
     get_client,
@@ -36,6 +42,17 @@ from handlers.ai_template import (
     add_template_ai_start,
     process_ai_template,
     process_ai_template_file,
+)
+
+# --- AI Coach ---
+from handlers.ai_coach import (
+    ai_coach_start,
+    ai_coach_bio,
+    ai_coach_sbd,
+    ai_coach_split,
+    ai_coach_goals,
+    ai_coach_review,
+    ai_coach_regen_comment,
 )
 
 # --- Template CRUD ---

@@ -55,6 +55,8 @@ last_chat_id = None
 
 SETTINGS_REST, SETTINGS_REST_CONFIRM = range(20, 22)
 
+AI_COACH_BIO, AI_COACH_SBD, AI_COACH_SPLIT, AI_COACH_GOALS, AI_COACH_REVIEW, AI_COACH_REGEN_COMMENT = range(30, 36)
+
 # --- Inline Keyboard Constants ---
 
 WEIGHT_KEYBOARD = InlineKeyboardMarkup(

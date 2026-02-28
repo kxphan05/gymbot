@@ -59,6 +59,19 @@ from handlers import (
     process_ai_template,
     process_ai_template_file,
     ADD_TEMPLATE_AI_INPUT,
+    ai_coach_start,
+    ai_coach_bio,
+    ai_coach_sbd,
+    ai_coach_split,
+    ai_coach_goals,
+    ai_coach_review,
+    ai_coach_regen_comment,
+    AI_COACH_BIO,
+    AI_COACH_SBD,
+    AI_COACH_SPLIT,
+    AI_COACH_GOALS,
+    AI_COACH_REVIEW,
+    AI_COACH_REGEN_COMMENT,
 )
 from database import init_db
 from dotenv import load_dotenv
@@ -202,12 +215,40 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel_edit)],
     )
 
+    ai_coach_conv = ConversationHandler(
+        entry_points=[CommandHandler("recommend_template", ai_coach_start)],
+        allow_reentry=True,
+        states={
+            AI_COACH_BIO: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, ai_coach_bio),
+            ],
+            AI_COACH_SBD: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, ai_coach_sbd),
+            ],
+            AI_COACH_SPLIT: [
+                CallbackQueryHandler(ai_coach_split, pattern="^split_"),
+            ],
+            AI_COACH_GOALS: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, ai_coach_goals),
+            ],
+            AI_COACH_REVIEW: [
+                CallbackQueryHandler(ai_coach_review, pattern="^coach_"),
+            ],
+            AI_COACH_REGEN_COMMENT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, ai_coach_regen_comment),
+                CallbackQueryHandler(ai_coach_regen_comment, pattern="^coach_regen_skip$"),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("history", history))
     application.add_handler(CommandHandler("settings", settings))
     application.add_handler(create_template_conv)
     application.add_handler(edit_template_conv)
     application.add_handler(add_template_ai_conv)
+    application.add_handler(ai_coach_conv)
     application.add_handler(workout_conv)
 
     settings_conv = ConversationHandler(
@@ -234,14 +275,13 @@ def main():
         )
     )
 
-    # application.run_webhook(
-    #     listen="0.0.0.0",
-    #     port=8080,
-    #     url_path=f"{TOKEN}",
-    #     webhook_url=f"{WEBHOOK_URL}/{TOKEN}",
-    #     ip_address="66.241.124.249",
-    # )
-    application.run_polling()
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=8080,
+        url_path=f"{TOKEN}",
+        webhook_url=f"{WEBHOOK_URL}/{TOKEN}",
+        ip_address="66.241.124.249",
+    )
 
 
 async def post_init(application):
