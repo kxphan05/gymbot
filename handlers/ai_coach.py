@@ -347,8 +347,6 @@ async def _generate_recommendation(update: Update, context: ContextTypes.DEFAULT
     except Exception:
         pass
 
-    regen_comments: list[str] = context.user_data.get("coach_regen_comments", [])
-
     user_prompt = (
         f"Athlete Profile:\n"
         f"- Age: {bio.get('age')} years\n"
@@ -358,14 +356,8 @@ async def _generate_recommendation(update: Update, context: ContextTypes.DEFAULT
         f"- 1RM Squat: {sbd.get('squat')} kg\n"
         f"- 1RM Deadlift: {sbd.get('deadlift')} kg\n"
         f"- Training Split: {split}\n"
-        f"- Goals / Notes: {goals}\n"
-    )
-    if regen_comments:
-        user_prompt += "\nRevision feedback to address (most recent last):\n"
-        user_prompt += "\n".join(f"  {i+1}. {c}" for i, c in enumerate(regen_comments))
-        user_prompt += "\n"
-    user_prompt += (
-        f"\nGenerate exactly {len(sessions)} workout session template(s) in this order:\n"
+        f"- Goals / Notes: {goals}\n\n"
+        f"Generate exactly {len(sessions)} workout session template(s) in this order:\n"
         f"{session_list}\n\n"
         f"Each session must target the appropriate muscle groups for its position in the {split} split."
     )
@@ -494,12 +486,11 @@ async def ai_coach_regen_comment(update: Update, context: ContextTypes.DEFAULT_T
         common.last_msg_id = update.callback_query.message.message_id
         return await _generate_recommendation(update, context)
 
-    # Text comment provided — accumulate across regenerations
+    # Text comment provided — append to goals so it travels with the bio data
     comment = update.message.text.strip()
     await _delete_user_msg(update)
-    comments: list[str] = context.user_data.get("coach_regen_comments", [])
-    comments.append(comment)
-    context.user_data["coach_regen_comments"] = comments
+    existing_goals = context.user_data.get("coach_goals", "")
+    context.user_data["coach_goals"] = f"{existing_goals}. Additional feedback: {comment}"
     return await _generate_recommendation(update, context)
 
 
