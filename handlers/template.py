@@ -4,6 +4,7 @@ import json
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from database import AsyncSessionLocal, Template, TemplateExercise
 import handlers.common as common
@@ -189,6 +190,11 @@ async def save_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"Template saved successfully: {name}")
             sent = await update.message.reply_text(
                 f"Template '{name}' saved with {len(exercises_data)} exercises! ✅"
+            )
+        except IntegrityError:
+            await session.rollback()
+            sent = await update.message.reply_text(
+                f"A template named '{name}' already exists. Please rename it and try again."
             )
         except Exception as e:
             await session.rollback()
@@ -872,6 +878,11 @@ async def save_edited_template(update: Update, context: ContextTypes.DEFAULT_TYP
                 await update.message.reply_text(
                     f"Template '{name}' saved with {len(exercises)} exercises! ✅"
                 )
+    except IntegrityError:
+        await query.message.reply_text(
+            f"A template named '{name}' already exists. Please rename it and try again."
+        )
+        return EDIT_TEMPLATE_EXERCISE
     except Exception as e:
         logger.error(f"Error saving template: {e}")
         await query.message.reply_text("Error saving template. Please try again.")
@@ -964,7 +975,10 @@ async def handle_delete_template_confirm(
                     "Error deleting template. Please try again."
                 )
         else:
-            await query.edit_message_text("No template selected for deletion.")
+            # Template hasn't been saved yet — just discard it
+            await query.edit_message_text(
+                f"Template '{template_name}' discarded. ✅"
+            )
 
         context.user_data.clear()
         return ConversationHandler.END

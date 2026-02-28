@@ -123,6 +123,7 @@ def main():
 
     add_template_ai_conv = ConversationHandler(
         entry_points=[CommandHandler("add_template_ai", add_template_ai_start)],
+        allow_reentry=True,
         states={
             ADD_TEMPLATE_AI_INPUT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, process_ai_template),
@@ -233,13 +234,14 @@ def main():
         )
     )
 
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=8080,
-        url_path=f"{TOKEN}",
-        webhook_url=f"{WEBHOOK_URL}/{TOKEN}",
-        ip_address="66.241.124.249",
-    )
+    # application.run_webhook(
+    #     listen="0.0.0.0",
+    #     port=8080,
+    #     url_path=f"{TOKEN}",
+    #     webhook_url=f"{WEBHOOK_URL}/{TOKEN}",
+    #     ip_address="66.241.124.249",
+    # )
+    application.run_polling()
 
 
 async def post_init(application):
