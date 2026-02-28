@@ -108,6 +108,31 @@ SPLIT_SESSIONS: dict[str, list[str]] = {
     "BroSplit":   ["Chest Day", "Back Day", "Shoulders Day", "Arms Day", "Legs Day"],
 }
 
+# Maps (split, session) → set of allowed primary muscle groups.
+# Core is universally allowed (common accessory on any day).
+_ALL_MUSCLE_GROUPS = {
+    "chest", "back", "shoulders", "quads", "hamstrings",
+    "glutes", "biceps", "triceps", "core", "calves",
+}
+
+SESSION_MUSCLE_GROUPS: dict[tuple[str, str], set[str]] = {
+    # PPL
+    ("PPL", "Push Day"):       {"chest", "shoulders", "triceps", "core"},
+    ("PPL", "Pull Day"):       {"back", "biceps", "shoulders", "core"},  # shoulders: rear-delt work
+    ("PPL", "Legs Day"):       {"quads", "hamstrings", "glutes", "calves", "core"},
+    # Upper / Lower
+    ("UpperLower", "Upper Body"): {"chest", "back", "shoulders", "biceps", "triceps", "core"},
+    ("UpperLower", "Lower Body"): {"quads", "hamstrings", "glutes", "calves", "core"},
+    # Full Body — everything allowed
+    ("FullBody", "Full Body"):    _ALL_MUSCLE_GROUPS,
+    # Bro Split
+    ("BroSplit", "Chest Day"):     {"chest", "core"},
+    ("BroSplit", "Back Day"):      {"back", "core"},
+    ("BroSplit", "Shoulders Day"): {"shoulders", "core"},
+    ("BroSplit", "Arms Day"):      {"biceps", "triceps", "core"},
+    ("BroSplit", "Legs Day"):      {"quads", "hamstrings", "glutes", "calves", "core"},
+}
+
 CSCS_SYSTEM_PROMPT = """\
 You are a Certified Strength & Conditioning Specialist (CSCS) and expert program designer.
 Design ONE workout session template based on the athlete profile and session type provided.
@@ -365,7 +390,15 @@ async def _generate_recommendation(update: Update, context: ContextTypes.DEFAULT
     logger.info(f"_generate_recommendation: launching {len(sessions)} parallel LLM calls for {split}")
 
     async def _call_session(session_name: str):
-        session_prompt = base_prompt + f"\nDesign the '{session_name}' session for this {split} split."
+        allowed = SESSION_MUSCLE_GROUPS.get((split, session_name), _ALL_MUSCLE_GROUPS)
+        allowed_str = ", ".join(sorted(allowed - {"core"}))
+        session_prompt = (
+            base_prompt
+            + f"\nDesign the '{session_name}' session for this {split} split."
+            + f"\nIMPORTANT: Only include exercises targeting these muscle groups: {allowed_str}."
+            + " You may also include core/ab work as accessory."
+            + " Do NOT include exercises for muscle groups outside this list."
+        )
         response = await ai_client.chat.completions.create(
             model=AI_MODEL,
             messages=[
@@ -402,6 +435,7 @@ async def _generate_recommendation(update: Update, context: ContextTypes.DEFAULT
         tmpl_name = raw_tmpl.get("template_name", session_name)
         notes = raw_tmpl.get("notes", "")
         exercises = _process_exercises(raw_tmpl.get("exercises", []), canonical_names)
+        exercises = _filter_exercises_for_session(exercises, split, session_name)
         volume_warnings = _check_volume(exercises)
         processed_templates.append({
             "template_name": tmpl_name,
@@ -628,6 +662,28 @@ def _process_exercises(raw_exercises: list[dict], canonical_names: list[str]) ->
             "sets_config": sets_config,
         })
     return exercises
+
+
+def _filter_exercises_for_session(
+    exercises: list[dict], split: str, session_name: str
+) -> list[dict]:
+    """Remove exercises whose muscle group is not valid for this session."""
+    allowed = SESSION_MUSCLE_GROUPS.get((split, session_name))
+    if allowed is None:
+        # Unknown session — skip filtering
+        return exercises
+
+    filtered: list[dict] = []
+    for ex in exercises:
+        mg = ex.get("muscle_group", "unknown").lower()
+        if mg in allowed:
+            filtered.append(ex)
+        else:
+            logger.warning(
+                f"Filtered out '{ex['name']}' (muscle_group='{mg}') "
+                f"from {split}/{session_name} — not in {allowed}"
+            )
+    return filtered
 
 
 async def _fetch_canonical_names(user_id: int) -> list[str]:
