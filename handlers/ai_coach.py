@@ -1,5 +1,6 @@
 """AI Coach: personalized multi-template recommendation via CSCS-style LLM prompting."""
 
+import asyncio
 import json
 import re
 from collections import defaultdict
@@ -109,35 +110,29 @@ SPLIT_SESSIONS: dict[str, list[str]] = {
 
 CSCS_SYSTEM_PROMPT = """\
 You are a Certified Strength & Conditioning Specialist (CSCS) and expert program designer.
-Your job is to design a complete training split — one template per session — based on the athlete profile.
+Design ONE workout session template based on the athlete profile and session type provided.
 
 You MUST respond with ONLY a valid JSON object. No explanation, no markdown, no text outside JSON.
 
 JSON schema:
 {
-  "templates": [
+  "template_name": "string — concise name (e.g. 'PPL Push Day')",
+  "notes": "string — 1 sentence rationale",
+  "exercises": [
     {
-      "template_name": "string — concise name matching the requested session (e.g. 'PPL Push Day')",
-      "notes": "string — 1 sentence rationale",
-      "exercises": [
-        {
-          "name": "string — specific canonical name (e.g. 'Barbell Bench Press')",
-          "muscle_group": "string — chest | back | shoulders | quads | hamstrings | glutes | biceps | triceps | core | calves",
-          "sets": int,
-          "sets_config": [{"weight": float, "reps": int}]
-        }
-      ]
+      "name": "string — specific canonical name (e.g. 'Barbell Bench Press')",
+      "muscle_group": "string — chest | back | shoulders | quads | hamstrings | glutes | biceps | triceps | core | calves",
+      "sets": int,
+      "sets_config": [{"weight": float, "reps": int}]
     }
   ]
 }
 
 Programming rules:
-- Generate exactly the sessions listed in the athlete's split — one object per session, in order.
 - sets_config length MUST equal "sets" exactly.
+- Include 4-6 exercises total. Keep total sets per muscle group to 6-10.
 - Base weights on the athlete's 1RM: ~70-80% for hypertrophy (6-12 reps), ~82-90% for strength (3-5 reps). Use beginner weights if 1RM is 0.
-- Keep total sets per muscle group to 6-10 within each session.
-- Do NOT repeat the same session type. Each template covers different muscle groups.
-- muscle_group MUST reflect the PRIMARY mover of the exercise. Examples:
+- muscle_group MUST reflect the PRIMARY mover. Examples:
     Overhead Press → shoulders, Lateral Raise → shoulders, Front Raise → shoulders
     Squat / Leg Press / Leg Extension / Lunge → quads
     Romanian Deadlift / Leg Curl / Nordic Curl → hamstrings
@@ -148,8 +143,8 @@ Programming rules:
     Pushdown / Skull Crusher / Tricep Extension → triceps
     Calf Raise → calves
     Plank / Crunch / Ab Wheel → core
-- NEVER assign a muscle group that does not match the exercise (e.g. Overhead Press is NOT quads, Lateral Raise is NOT calves).
-- Always assign a realistic weight > 0 unless the exercise is purely bodyweight with no added load.
+- NEVER assign a muscle group that does not match the exercise.
+- Always assign a realistic weight > 0 unless the exercise is purely bodyweight.
 """
 
 
@@ -335,21 +330,9 @@ async def _generate_recommendation(update: Update, context: ContextTypes.DEFAULT
     goals = context.user_data.get("coach_goals", "No specific goals.")
 
     sessions = SPLIT_SESSIONS.get(split, ["Full Body"])
-    session_list = "\n".join(f"  {i+1}. {s}" for i, s in enumerate(sessions))
-
-    try:
-        await context.bot.edit_message_text(
-            chat_id=update.effective_chat.id,
-            message_id=common.last_msg_id,
-            text=f"⚙️ Generating {len(sessions)} template{'s' if len(sessions) > 1 else ''} for *{split}*, please wait...",
-            parse_mode="Markdown",
-        )
-    except Exception:
-        pass
-
     regen_comments: list[str] = context.user_data.get("coach_regen_comments", [])
 
-    user_prompt = (
+    base_prompt = (
         f"Athlete Profile:\n"
         f"- Age: {bio.get('age')} years\n"
         f"- Weight: {bio.get('weight')} kg\n"
@@ -361,33 +344,50 @@ async def _generate_recommendation(update: Update, context: ContextTypes.DEFAULT
         f"- Goals / Notes: {goals}\n"
     )
     if regen_comments:
-        user_prompt += "\nRevision feedback to address (most recent last):\n"
-        user_prompt += "\n".join(f"  {i+1}. {c}" for i, c in enumerate(regen_comments))
-        user_prompt += "\n"
-    user_prompt += (
-        f"\nGenerate exactly {len(sessions)} workout session template(s) in this order:\n"
-        f"{session_list}\n\n"
-        f"Each session must target the appropriate muscle groups for its position in the {split} split."
-    )
+        base_prompt += "\nRevision feedback to address (most recent last):\n"
+        base_prompt += "\n".join(f"  {i+1}. {c}" for i, c in enumerate(regen_comments))
+        base_prompt += "\n"
 
-    logger.info(f"_generate_recommendation: about to call LLM (split={split}, regen_comments={len(regen_comments)})")
+    ai_client = get_client()
+    canonical_names = await _fetch_canonical_names(update.effective_user.id)
+    error_text = "❌ Failed to generate templates. Try /recommend_template again or /cancel."
+
     try:
-        ai_client = get_client()
-        logger.info(f"_generate_recommendation: client obtained, sending request to {AI_MODEL}")
+        await context.bot.edit_message_text(
+            chat_id=update.effective_chat.id,
+            message_id=common.last_msg_id,
+            text=f"⚙️ Generating {len(sessions)} template{'s' if len(sessions) > 1 else ''} for *{split}* in parallel...",
+            parse_mode="Markdown",
+        )
+    except Exception:
+        pass
+
+    logger.info(f"_generate_recommendation: launching {len(sessions)} parallel LLM calls for {split}")
+
+    async def _call_session(session_name: str):
+        session_prompt = base_prompt + f"\nDesign the '{session_name}' session for this {split} split."
         response = await ai_client.chat.completions.create(
             model=AI_MODEL,
             messages=[
                 {"role": "system", "content": CSCS_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
+                {"role": "user", "content": session_prompt},
             ],
             response_format={"type": "json_object"},
-            max_tokens=6000,
+            max_tokens=2500,
         )
-        logger.info("_generate_recommendation: LLM response received")
-        data = json.loads(response.choices[0].message.content)
-    except Exception as e:
-        logger.error(f"AI Coach generation error: {e}", exc_info=True)
-        error_text = "❌ Failed to generate templates. Try /recommend_template again or /cancel."
+        return json.loads(response.choices[0].message.content)
+
+    results = await asyncio.gather(
+        *[_call_session(s) for s in sessions],
+        return_exceptions=True,
+    )
+    logger.info("_generate_recommendation: all parallel calls complete")
+
+    # Check for any failures
+    failed = [(sessions[i], results[i]) for i in range(len(results)) if isinstance(results[i], Exception)]
+    if failed:
+        for name, exc in failed:
+            logger.error(f"AI Coach generation error for session '{name}': {exc}", exc_info=exc)
         try:
             await context.bot.edit_message_text(
                 chat_id=update.effective_chat.id,
@@ -398,17 +398,9 @@ async def _generate_recommendation(update: Update, context: ContextTypes.DEFAULT
             await context.bot.send_message(chat_id=update.effective_chat.id, text=error_text)
         return ConversationHandler.END
 
-    raw_templates = data.get("templates", [])
-
-    # If the LLM returned a single-template format (no "templates" key), wrap it
-    if not raw_templates and "exercises" in data:
-        raw_templates = [data]
-
-    canonical_names = await _fetch_canonical_names(update.effective_user.id)
-
     processed_templates = []
-    for raw_tmpl in raw_templates:
-        tmpl_name = raw_tmpl.get("template_name", "AI Coach Template")
+    for session_name, raw_tmpl in zip(sessions, results):
+        tmpl_name = raw_tmpl.get("template_name", session_name)
         notes = raw_tmpl.get("notes", "")
         exercises = _process_exercises(raw_tmpl.get("exercises", []), canonical_names)
         volume_warnings = _check_volume(exercises)
