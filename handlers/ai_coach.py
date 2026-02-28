@@ -384,14 +384,18 @@ async def _generate_recommendation(update: Update, context: ContextTypes.DEFAULT
         data = json.loads(response.choices[0].message.content)
     except Exception as e:
         logger.error(f"AI Coach generation error: {e}")
+        error_text = "❌ Failed to generate templates. Try /recommend_template again or /cancel."
         try:
             await context.bot.edit_message_text(
                 chat_id=update.effective_chat.id,
                 message_id=common.last_msg_id,
-                text="❌ Failed to generate templates. Try /recommend_template again or /cancel.",
+                text=error_text,
             )
         except Exception:
-            pass
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=error_text,
+            )
         return ConversationHandler.END
 
     raw_templates = data.get("templates", [])
@@ -441,9 +445,13 @@ async def _generate_recommendation(update: Update, context: ContextTypes.DEFAULT
             reply_markup=keyboard,
         )
     except Exception:
-        effective_message = update.message or update.callback_query.message
-        sent = await effective_message.reply_text(
-            draft_text, parse_mode="Markdown", reply_markup=keyboard
+        # Fallback: send a fresh message — never reply_text on a potentially
+        # deleted message (e.g. after the user's regen comment was deleted).
+        sent = await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=draft_text,
+            parse_mode="Markdown",
+            reply_markup=keyboard,
         )
         common.last_msg_id = sent.message_id
 
