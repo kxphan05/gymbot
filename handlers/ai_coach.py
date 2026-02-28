@@ -25,7 +25,79 @@ from handlers.common import (
 
 VOLUME_GUARD_THRESHOLD = 8
 FUZZY_MATCH_THRESHOLD = 70
+MUSCLE_CORRECTION_THRESHOLD = 82  # higher bar — only override when very confident
 AI_MODEL = "allenai/Molmo2-8B"
+
+# Canonical exercise → primary muscle group lookup.
+# Used to correct LLM hallucinations in muscle group assignments.
+EXERCISE_MUSCLE_MAP: dict[str, str] = {
+    # Chest
+    "bench press": "chest", "barbell bench press": "chest",
+    "dumbbell bench press": "chest", "incline bench press": "chest",
+    "decline bench press": "chest", "incline dumbbell press": "chest",
+    "decline dumbbell press": "chest", "chest fly": "chest",
+    "dumbbell fly": "chest", "cable fly": "chest",
+    "cable crossover": "chest", "push up": "chest", "pushup": "chest",
+    "chest press": "chest", "pec deck": "chest",
+    # Back
+    "pull up": "back", "pullup": "back", "chin up": "back", "chinup": "back",
+    "lat pulldown": "back", "barbell row": "back", "bent over row": "back",
+    "dumbbell row": "back", "cable row": "back", "seated cable row": "back",
+    "t-bar row": "back", "t bar row": "back", "deadlift": "back",
+    "conventional deadlift": "back", "rack pull": "back",
+    "single arm dumbbell row": "back", "meadows row": "back",
+    # Shoulders
+    "overhead press": "shoulders", "military press": "shoulders",
+    "barbell overhead press": "shoulders", "dumbbell overhead press": "shoulders",
+    "dumbbell shoulder press": "shoulders", "arnold press": "shoulders",
+    "lateral raise": "shoulders", "dumbbell lateral raise": "shoulders",
+    "cable lateral raise": "shoulders", "front raise": "shoulders",
+    "rear delt fly": "shoulders", "rear delt raise": "shoulders",
+    "reverse fly": "shoulders", "upright row": "shoulders",
+    "face pull": "shoulders", "cable face pull": "shoulders",
+    "landmine press": "shoulders",
+    # Quads
+    "squat": "quads", "back squat": "quads", "front squat": "quads",
+    "goblet squat": "quads", "leg press": "quads", "leg extension": "quads",
+    "hack squat": "quads", "bulgarian split squat": "quads",
+    "split squat": "quads", "lunge": "quads", "lunges": "quads",
+    "step up": "quads", "walking lunge": "quads", "reverse lunge": "quads",
+    "sissy squat": "quads",
+    # Hamstrings
+    "romanian deadlift": "hamstrings", "rdl": "hamstrings",
+    "leg curl": "hamstrings", "hamstring curl": "hamstrings",
+    "lying leg curl": "hamstrings", "seated leg curl": "hamstrings",
+    "nordic curl": "hamstrings", "good morning": "hamstrings",
+    "stiff leg deadlift": "hamstrings", "straight leg deadlift": "hamstrings",
+    "sumo deadlift": "hamstrings",
+    # Glutes
+    "hip thrust": "glutes", "barbell hip thrust": "glutes",
+    "glute bridge": "glutes", "cable kickback": "glutes",
+    "glute kickback": "glutes", "hip abduction": "glutes",
+    "sumo squat": "glutes", "cable pull through": "glutes",
+    # Biceps
+    "bicep curl": "biceps", "biceps curl": "biceps",
+    "barbell curl": "biceps", "dumbbell curl": "biceps",
+    "hammer curl": "biceps", "preacher curl": "biceps",
+    "cable curl": "biceps", "ez bar curl": "biceps",
+    "incline curl": "biceps", "concentration curl": "biceps",
+    "spider curl": "biceps",
+    # Triceps
+    "tricep extension": "triceps", "triceps extension": "triceps",
+    "skull crusher": "triceps", "tricep pushdown": "triceps",
+    "triceps pushdown": "triceps", "cable pushdown": "triceps",
+    "close grip bench press": "triceps", "overhead tricep extension": "triceps",
+    "tricep dips": "triceps", "tricep kickback": "triceps",
+    "rope pushdown": "triceps",
+    # Core
+    "plank": "core", "crunch": "core", "sit up": "core", "situp": "core",
+    "russian twist": "core", "ab wheel": "core", "leg raise": "core",
+    "dead bug": "core", "cable crunch": "core", "hanging leg raise": "core",
+    "hollow hold": "core",
+    # Calves
+    "calf raise": "calves", "standing calf raise": "calves",
+    "seated calf raise": "calves", "donkey calf raise": "calves",
+}
 
 # Maps split key → ordered list of session names the LLM must generate
 SPLIT_SESSIONS: dict[str, list[str]] = {
@@ -65,6 +137,19 @@ Programming rules:
 - Base weights on the athlete's 1RM: ~70-80% for hypertrophy (6-12 reps), ~82-90% for strength (3-5 reps). Use beginner weights if 1RM is 0.
 - Keep total sets per muscle group to 6-10 within each session.
 - Do NOT repeat the same session type. Each template covers different muscle groups.
+- muscle_group MUST reflect the PRIMARY mover of the exercise. Examples:
+    Overhead Press → shoulders, Lateral Raise → shoulders, Front Raise → shoulders
+    Squat / Leg Press / Leg Extension / Lunge → quads
+    Romanian Deadlift / Leg Curl / Nordic Curl → hamstrings
+    Hip Thrust / Glute Bridge → glutes
+    Deadlift / Row / Pulldown / Pull Up → back
+    Bench Press / Fly / Push Up → chest
+    Curl (any) → biceps
+    Pushdown / Skull Crusher / Tricep Extension → triceps
+    Calf Raise → calves
+    Plank / Crunch / Ab Wheel → core
+- NEVER assign a muscle group that does not match the exercise (e.g. Overhead Press is NOT quads, Lateral Raise is NOT calves).
+- Always assign a realistic weight > 0 unless the exercise is purely bodyweight with no added load.
 """
 
 
@@ -482,16 +567,52 @@ async def _save_coach_templates(update: Update, context: ContextTypes.DEFAULT_TY
 # ---------------------------------------------------------------------------
 
 
+def _correct_muscle_group(exercise_name: str, llm_group: str) -> tuple[str, bool]:
+    """
+    Return (corrected_muscle_group, was_corrected).
+    Checks the exercise name against EXERCISE_MUSCLE_MAP via exact then fuzzy match.
+    Only overrides the LLM when confidence is >= MUSCLE_CORRECTION_THRESHOLD.
+    """
+    name_lower = exercise_name.lower().strip()
+
+    # Exact match first
+    if name_lower in EXERCISE_MUSCLE_MAP:
+        correct = EXERCISE_MUSCLE_MAP[name_lower]
+        if correct != llm_group:
+            return correct, True
+        return llm_group, False
+
+    # Fuzzy match against map keys
+    result = fuzz_process.extractOne(name_lower, EXERCISE_MUSCLE_MAP.keys())
+    if result:
+        match, score = result
+        if score >= MUSCLE_CORRECTION_THRESHOLD:
+            correct = EXERCISE_MUSCLE_MAP[match]
+            if correct != llm_group:
+                logger.info(
+                    f"Muscle group corrected: '{exercise_name}' "
+                    f"LLM='{llm_group}' → '{correct}' (via '{match}', score {score})"
+                )
+                return correct, True
+
+    return llm_group, False
+
+
 def _process_exercises(raw_exercises: list[dict], canonical_names: list[str]) -> list[dict]:
-    """Fuzzy-match names and normalise sets_config length."""
+    """Fuzzy-match names, correct muscle groups, and normalise sets_config length."""
     exercises = []
     for ex in raw_exercises:
         name = ex.get("name", "Unknown Exercise")
+
+        # Fuzzy-match exercise name to user's existing canonical names
         if canonical_names:
             match, score = fuzz_process.extractOne(name, canonical_names)
             if score >= FUZZY_MATCH_THRESHOLD:
-                logger.info(f"Fuzzy match: '{name}' → '{match}' (score {score})")
+                logger.info(f"Name fuzzy match: '{name}' → '{match}' (score {score})")
                 name = match
+
+        llm_group = ex.get("muscle_group", "unknown").lower()
+        muscle_group, _ = _correct_muscle_group(name, llm_group)
 
         sets_config = ex.get("sets_config", [])
         sets = ex.get("sets", len(sets_config))
@@ -501,7 +622,7 @@ def _process_exercises(raw_exercises: list[dict], canonical_names: list[str]) ->
 
         exercises.append({
             "name": name,
-            "muscle_group": ex.get("muscle_group", "unknown").lower(),
+            "muscle_group": muscle_group,
             "sets": sets,
             "sets_config": sets_config,
         })
