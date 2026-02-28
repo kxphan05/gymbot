@@ -595,8 +595,9 @@ def _correct_muscle_group(exercise_name: str, llm_group: str) -> tuple[str, bool
 
 
 def _process_exercises(raw_exercises: list[dict], canonical_names: list[str]) -> list[dict]:
-    """Fuzzy-match names, correct muscle groups, and normalise sets_config length."""
+    """Fuzzy-match names, correct muscle groups, normalise sets_config, and deduplicate."""
     exercises = []
+    seen_names: set[str] = set()
     for ex in raw_exercises:
         name = ex.get("name", "Unknown Exercise")
 
@@ -615,6 +616,11 @@ def _process_exercises(raw_exercises: list[dict], canonical_names: list[str]) ->
         while len(sets_config) < sets:
             sets_config.append(sets_config[-1] if sets_config else {"weight": 0, "reps": 8})
         sets_config = sets_config[:sets]
+
+        if name.lower() in seen_names:
+            logger.info(f"Duplicate exercise skipped: '{name}'")
+            continue
+        seen_names.add(name.lower())
 
         exercises.append({
             "name": name,
