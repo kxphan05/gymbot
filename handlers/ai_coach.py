@@ -373,7 +373,6 @@ async def _generate_recommendation(update: Update, context: ContextTypes.DEFAULT
                 {"role": "user", "content": session_prompt},
             ],
             response_format={"type": "json_object"},
-            max_tokens=2500,
         )
         return json.loads(response.choices[0].message.content)
 
