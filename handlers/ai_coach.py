@@ -108,19 +108,48 @@ SPLIT_SESSIONS: dict[str, list[str]] = {
 }
 
 CSCS_SYSTEM_PROMPT = """\
-You are a CSCS-certified program designer. Design a training split based on the athlete profile.
+You are a Certified Strength & Conditioning Specialist (CSCS) and expert program designer.
+Your job is to design a complete training split — one template per session — based on the athlete profile.
 
-Respond with ONLY a valid JSON object — no markdown, no explanation.
+You MUST respond with ONLY a valid JSON object. No explanation, no markdown, no text outside JSON.
 
-Schema:
-{"templates":[{"template_name":"string","notes":"string","exercises":[{"name":"string","muscle_group":"string","sets":int,"weight":float,"reps":int}]}]}
+JSON schema:
+{
+  "templates": [
+    {
+      "template_name": "string — concise name matching the requested session (e.g. 'PPL Push Day')",
+      "notes": "string — 1 sentence rationale",
+      "exercises": [
+        {
+          "name": "string — specific canonical name (e.g. 'Barbell Bench Press')",
+          "muscle_group": "string — chest | back | shoulders | quads | hamstrings | glutes | biceps | triceps | core | calves",
+          "sets": int,
+          "sets_config": [{"weight": float, "reps": int}]
+        }
+      ]
+    }
+  ]
+}
 
-Rules:
-- One template object per requested session, in order.
-- muscle_group: chest|back|shoulders|quads|hamstrings|glutes|biceps|triceps|core|calves
-- Weight based on 1RM (~75% hypertrophy, ~85% strength). Use realistic beginner weight if 1RM=0.
-- 3-5 exercises per session, 3-4 sets each.
-- weight must be >0 unless truly bodyweight only.
+Programming rules:
+- Generate exactly the sessions listed in the athlete's split — one object per session, in order.
+- sets_config length MUST equal "sets" exactly.
+- Base weights on the athlete's 1RM: ~70-80% for hypertrophy (6-12 reps), ~82-90% for strength (3-5 reps). Use beginner weights if 1RM is 0.
+- Keep total sets per muscle group to 6-10 within each session.
+- Do NOT repeat the same session type. Each template covers different muscle groups.
+- muscle_group MUST reflect the PRIMARY mover of the exercise. Examples:
+    Overhead Press → shoulders, Lateral Raise → shoulders, Front Raise → shoulders
+    Squat / Leg Press / Leg Extension / Lunge → quads
+    Romanian Deadlift / Leg Curl / Nordic Curl → hamstrings
+    Hip Thrust / Glute Bridge → glutes
+    Deadlift / Row / Pulldown / Pull Up → back
+    Bench Press / Fly / Push Up → chest
+    Curl (any) → biceps
+    Pushdown / Skull Crusher / Tricep Extension → triceps
+    Calf Raise → calves
+    Plank / Crunch / Ab Wheel → core
+- NEVER assign a muscle group that does not match the exercise (e.g. Overhead Press is NOT quads, Lateral Raise is NOT calves).
+- Always assign a realistic weight > 0 unless the exercise is purely bodyweight with no added load.
 """
 
 
@@ -318,6 +347,8 @@ async def _generate_recommendation(update: Update, context: ContextTypes.DEFAULT
     except Exception:
         pass
 
+    regen_comments: list[str] = context.user_data.get("coach_regen_comments", [])
+
     user_prompt = (
         f"Athlete Profile:\n"
         f"- Age: {bio.get('age')} years\n"
@@ -327,14 +358,22 @@ async def _generate_recommendation(update: Update, context: ContextTypes.DEFAULT
         f"- 1RM Squat: {sbd.get('squat')} kg\n"
         f"- 1RM Deadlift: {sbd.get('deadlift')} kg\n"
         f"- Training Split: {split}\n"
-        f"- Goals / Notes: {goals}\n\n"
-        f"Generate exactly {len(sessions)} workout session template(s) in this order:\n"
+        f"- Goals / Notes: {goals}\n"
+    )
+    if regen_comments:
+        user_prompt += "\nRevision feedback to address (most recent last):\n"
+        user_prompt += "\n".join(f"  {i+1}. {c}" for i, c in enumerate(regen_comments))
+        user_prompt += "\n"
+    user_prompt += (
+        f"\nGenerate exactly {len(sessions)} workout session template(s) in this order:\n"
         f"{session_list}\n\n"
         f"Each session must target the appropriate muscle groups for its position in the {split} split."
     )
 
+    logger.info(f"_generate_recommendation: about to call LLM (split={split}, regen_comments={len(regen_comments)})")
     try:
         ai_client = get_client()
+        logger.info(f"_generate_recommendation: client obtained, sending request to {AI_MODEL}")
         response = await ai_client.chat.completions.create(
             model=AI_MODEL,
             messages=[
@@ -344,27 +383,10 @@ async def _generate_recommendation(update: Update, context: ContextTypes.DEFAULT
             response_format={"type": "json_object"},
             max_tokens=6000,
         )
-        content = response.choices[0].message.content
-        try:
-            data = json.loads(content)
-        except json.JSONDecodeError:
-            # Attempt to recover truncated JSON by closing open brackets
-            fixed = content.strip()
-            stack = []
-            for ch in fixed:
-                if ch == "{":
-                    stack.append("}")
-                elif ch == "[":
-                    stack.append("]")
-                elif ch == "}" and stack and stack[-1] == "}":
-                    stack.pop()
-                elif ch == "]" and stack and stack[-1] == "]":
-                    stack.pop()
-            while stack:
-                fixed += stack.pop()
-            data = json.loads(fixed)  # raises if still invalid → caught below
+        logger.info("_generate_recommendation: LLM response received")
+        data = json.loads(response.choices[0].message.content)
     except Exception as e:
-        logger.error(f"AI Coach generation error: {e}")
+        logger.error(f"AI Coach generation error: {e}", exc_info=True)
         error_text = "❌ Failed to generate templates. Try /recommend_template again or /cancel."
         try:
             await context.bot.edit_message_text(
@@ -373,10 +395,7 @@ async def _generate_recommendation(update: Update, context: ContextTypes.DEFAULT
                 text=error_text,
             )
         except Exception:
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text=error_text,
-            )
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=error_text)
         return ConversationHandler.END
 
     raw_templates = data.get("templates", [])
@@ -426,13 +445,9 @@ async def _generate_recommendation(update: Update, context: ContextTypes.DEFAULT
             reply_markup=keyboard,
         )
     except Exception:
-        # Fallback: send a fresh message — never reply_text on a potentially
-        # deleted message (e.g. after the user's regen comment was deleted).
-        sent = await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=draft_text,
-            parse_mode="Markdown",
-            reply_markup=keyboard,
+        effective_message = update.message or update.callback_query.message
+        sent = await effective_message.reply_text(
+            draft_text, parse_mode="Markdown", reply_markup=keyboard
         )
         common.last_msg_id = sent.message_id
 
@@ -475,11 +490,12 @@ async def ai_coach_regen_comment(update: Update, context: ContextTypes.DEFAULT_T
         common.last_msg_id = update.callback_query.message.message_id
         return await _generate_recommendation(update, context)
 
-    # Text comment provided — append to goals so it travels with the bio data
+    # Text comment provided — accumulate across regenerations
     comment = update.message.text.strip()
     await _delete_user_msg(update)
-    existing_goals = context.user_data.get("coach_goals", "")
-    context.user_data["coach_goals"] = f"{existing_goals}. Additional feedback: {comment}"
+    comments: list[str] = context.user_data.get("coach_regen_comments", [])
+    comments.append(comment)
+    context.user_data["coach_regen_comments"] = comments
     return await _generate_recommendation(update, context)
 
 
@@ -587,11 +603,12 @@ def _correct_muscle_group(exercise_name: str, llm_group: str) -> tuple[str, bool
 
 
 def _process_exercises(raw_exercises: list[dict], canonical_names: list[str]) -> list[dict]:
-    """Fuzzy-match names, correct muscle groups, and build sets_config from flat weight/reps."""
+    """Fuzzy-match names, correct muscle groups, and normalise sets_config length."""
     exercises = []
     for ex in raw_exercises:
         name = ex.get("name", "Unknown Exercise")
 
+        # Fuzzy-match exercise name to user's existing canonical names
         if canonical_names:
             match, score = fuzz_process.extractOne(name, canonical_names)
             if score >= FUZZY_MATCH_THRESHOLD:
@@ -601,10 +618,11 @@ def _process_exercises(raw_exercises: list[dict], canonical_names: list[str]) ->
         llm_group = ex.get("muscle_group", "unknown").lower()
         muscle_group, _ = _correct_muscle_group(name, llm_group)
 
-        sets = max(int(ex.get("sets", 3)), 1)
-        weight = float(ex.get("weight", 0))
-        reps = int(ex.get("reps", 8))
-        sets_config = [{"weight": weight, "reps": reps}] * sets
+        sets_config = ex.get("sets_config", [])
+        sets = ex.get("sets", len(sets_config))
+        while len(sets_config) < sets:
+            sets_config.append(sets_config[-1] if sets_config else {"weight": 0, "reps": 8})
+        sets_config = sets_config[:sets]
 
         exercises.append({
             "name": name,
